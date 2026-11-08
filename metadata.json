@@ -1,0 +1,6 @@
+{
+  "name": "ReqTrace AI",
+  "description": "AI-powered Requirement Traceability, Software Testing and Quality Assurance Intelligence Platform",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
