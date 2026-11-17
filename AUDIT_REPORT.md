@@ -57,6 +57,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
 | `/assistant` | Saved project conversations, retrieved-record answers, and source links | Implemented with local-search fallback; live provider path needs server-side key; streaming and regenerate remain open |
 | `/github` | Server-configured repository import and requirement links to issues, PRs, commits, branches | Implemented for manual read-only sync; requires `GITHUB_TOKEN`; OAuth and webhook sync remain open |
+| `/reports` | Requirement progress, test execution, and defect reports with safe CSV export | Implemented; PDF/XLSX and date-filtered analytics remain open |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
 
 ## No UI-only features to misrepresent

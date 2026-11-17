@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown,
+  ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Github, Inbox, Layers3,
   ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
-  Sparkles, Trash2, Upload, X
+  Download, Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
 import { analyzeRequirement, createDefect, createGitHubRequirementLink, createTestCase, createTestExecution, getAvailableGitHubRepositories, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, sendAssistantMessage, syncGitHubRepository, updateDefect } from './services/persistence';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -272,6 +272,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
           <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
           <NavLink to="/github" aria-label="GitHub integration" title="GitHub integration" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Github size={17} /><span>GitHub</span></NavLink>
+          <NavLink to="/reports" aria-label="Reports and analytics" title="Reports and analytics" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><BarChart3 size={17} /><span>Reports</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
@@ -302,6 +303,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
             <Route path="/github" element={<GitHubPage project={props.project} requirements={props.requirements} />} />
+            <Route path="/reports" element={<ReportsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
@@ -667,6 +669,36 @@ function AssistantPage({ project }: { project: Project }) {
     {error && <div className="sync-alert" role="status">{error}</div>}
     <div className="assistant-layout"><aside className="surface assistant-conversations"><div className="section-heading"><div><span className="eyebrow">HISTORY</span><h2>Conversations</h2></div><button className="button button-secondary button-small" onClick={() => { setActiveId(''); setMessages([]); setError(''); }}>New</button></div>{conversations.map((item) => <button className={`ai-requirement-row${activeId === item.id ? ' active' : ''}`} key={item.id} onClick={() => void selectConversation(item.id)}><b>{item.title}</b><small>{dateLabel(item.updatedAt)}</small></button>)}</aside>
       <section className="surface assistant-thread"><div className="assistant-messages">{messages.length === 0 ? <EmptyState icon={<MessageSquareText size={18} />} title="Ask about this project" text="Try “Which requirements have test cases?” or “Summarize the open defects.”" /> : messages.map((message) => <article className={`assistant-message ${message.role}`} key={message.id}><b>{message.role === 'user' ? 'You' : `ReqTrace · ${message.provider}`}</b><p>{message.content}</p>{message.sources.length > 0 && <div className="assistant-sources"><span>Sources</span>{message.sources.map((source) => <Link key={source.id} to={source.path}>{source.code} · {source.title}</Link>)}</div>}</article>)}</div><form className="assistant-composer" onSubmit={send}><textarea rows={3} maxLength={10000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask a question grounded in this project…" /><div><small>Answers are based on stored project records and may include recommendations when an AI provider is configured.</small><button className="button button-primary" disabled={busy || !draft.trim()} type="submit">{busy ? 'Thinking…' : 'Send'}<ArrowRight size={14} /></button></div></form></section></div>
+  </div>;
+}
+
+function ReportsPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+  const [type, setType] = useState<'progress' | 'tests' | 'defects'>('progress');
+  const [cases, setCases] = useState<TestCaseRecord[]>([]);
+  const [executions, setExecutions] = useState<TestExecutionRecord[]>([]);
+  const [defects, setDefects] = useState<DefectRecord[]>([]);
+  const [available, setAvailable] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => { setBusy(true); try { const [testCases, runs, issues] = await Promise.all([getTestCases(project.id), getTestExecutions(project.id), getDefects(project.id)]); setCases(testCases); setExecutions(runs); setDefects(issues); setAvailable(true); setError(''); } catch { setAvailable(false); setError('Test and defect report data is unavailable while the local API is offline. Requirement records shown in the project report come from the current workspace cache.'); } finally { setBusy(false); } };
+  useEffect(() => { void refresh(); }, [project.id]);
+  const rows: Record<string, string>[] = type === 'progress'
+    ? requirements.map((r) => ({ requirement: r.code, title: r.title, status: r.status, priority: r.priority, type: r.type, testCaseCount: String(cases.filter((test) => test.requirementId === r.id).length) }))
+    : type === 'tests'
+      ? executions.map((run) => ({ testCase: cases.find((item) => item.id === run.testCaseId)?.code ?? run.testCaseId, title: cases.find((item) => item.id === run.testCaseId)?.title ?? 'Unknown test case', status: run.status, actualResult: run.actualResult, executedAt: run.executedAt }))
+      : defects.map((item) => ({ defect: item.code, title: item.title, severity: item.severity, status: item.status, requirement: requirements.find((r) => r.id === item.requirementId)?.code ?? '', testCase: cases.find((test) => test.id === item.testCaseId)?.code ?? '', createdAt: item.createdAt }));
+  const reportName = type === 'progress' ? 'Project progress' : type === 'tests' ? 'Test execution' : 'Defect analysis';
+  const exportCsv = () => {
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const encode = (value: string) => { const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value; return `"${safe.replaceAll('"', '""')}"`; };
+    const csv = [headers.map(encode).join(','), ...rows.map((row) => headers.map((key) => encode(row[key] ?? '')).join(','))].join('\r\n');
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${project.key}-${type}-report.csv`; anchor.click(); URL.revokeObjectURL(url);
+  };
+  return <div className="narrow-page reports-page"><div className="eyebrow"><BarChart3 size={13} /> PROJECT REPORTS · {project.key}</div><h1 className="page-heading">Reports & analytics</h1><p className="page-subheading">Build exports from persisted project records. The CSV contains the current report view and excludes placeholder metrics.</p>{error && <div className="sync-alert" role="status">{error}</div>}
+    <section className="surface report-toolbar"><label>Report<select value={type} onChange={(e) => setType(e.target.value as typeof type)}><option value="progress">Requirement progress</option><option value="tests">Test execution history</option><option value="defects">Defect analysis</option></select></label><div><button className="button button-secondary" disabled={busy} onClick={() => void refresh()}>{busy ? 'Refreshing…' : 'Refresh'}</button><button className="button button-primary" disabled={!rows.length} onClick={exportCsv}><Download size={15} /> Export CSV</button></div></section>
+    <section className="surface report-preview"><div className="section-heading"><div><span className="eyebrow">{reportName.toUpperCase()}</span><h2>{rows.length} records</h2></div><span className="phase-pill">{type === 'progress' ? 'Current workspace requirements' : available ? 'Persisted API data' : 'Data unavailable'}</span></div>{rows.length ? <div className="trace-table-wrap"><table className="trace-table"><thead><tr>{Object.keys(rows[0]).map((key) => <th key={key}>{key.replaceAll(/([A-Z])/g, ' $1')}</th>)}</tr></thead><tbody>{rows.slice(0, 200).map((row, index) => <tr key={index}>{Object.values(row).map((value, cell) => <td key={cell}>{value}</td>)}</tr>)}</tbody></table>{rows.length > 200 && <small className="report-limit">Preview limited to 200 rows. Export includes all {rows.length} rows.</small>}</div> : <EmptyState icon={<BarChart3 size={18} />} title="No records for this report" text={type === 'progress' ? 'Capture project requirements to build this report.' : 'Persisted records for this report will appear here.'} />}</section>
   </div>;
 }
 

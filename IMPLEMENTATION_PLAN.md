@@ -116,3 +116,12 @@ a least-privilege `GITHUB_TOKEN` in the ignored backend `.env` to use it. No
 live account token is present here; OAuth, webhooks, pagination, and background
 sync remain future work. TypeScript and all 15 backend tests pass; the
 refreshed installer and packaged-sidecar smoke test pass (28.86 MiB installer).
+
+## Reports slice
+
+The `/reports` route builds requirement progress, test execution history, and
+defect analysis from current project state and persisted API records. It
+supports refresh and CSV export with spreadsheet-formula cells neutralized.
+PDF/XLSX, date filters, and scheduled report generation are still open.
+TypeScript and Vite builds pass, and the refreshed 28.86 MiB installer plus
+packaged-sidecar smoke test pass.
