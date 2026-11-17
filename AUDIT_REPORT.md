@@ -52,6 +52,8 @@ The previous implementation plan correctly limits the current release to local p
 | `/project` | Read-only active project details | Partial |
 | `/new-project` | Create a project | Implemented |
 | `/traceability` | Persisted requirement-to-requirement link matrix and orphan list | Implemented; does not yet link tests, defects, code, or source artifacts |
+| `/tests` | Create and list persisted manual test cases with requirement references | Implemented; execution and run evidence are not yet available |
+| `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
 
 ## No UI-only features to misrepresent
@@ -96,3 +98,12 @@ same-project/self/duplicate validation, audit/outbox records, and linked/orphan
 views. The packaged sidecar smoke check passed and left no test processes
 running. Live Oracle verification and the remaining product modules are still
 open work.
+
+## Test and defect progress
+
+Alembic revision `20261117_0004` adds persisted test cases and defects. The API
+validates requirement/test references against the active project, assigns
+readable IDs, records audit and outbox events, and supports defect status
+changes. The `/tests` and `/defects` screens create and list those records.
+Automated runs, execution evidence, broader multi-entity trace views, and a
+refreshed installer smoke run are being completed for this slice.

@@ -144,3 +144,49 @@ class TraceabilityRead(APIModel):
     links: list[RequirementLinkRead]
     orphan_requirement_ids: list[str]
     linked_percent: int
+
+
+class TestCaseCreate(APIModel):
+    requirement_id: str | None = None
+    title: str = Field(min_length=1, max_length=300)
+    preconditions: str = ""
+    steps: list[str] = Field(min_length=1)
+    expected_result: str = Field(min_length=1)
+
+
+class TestCaseRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str | None
+    code: str
+    title: str
+    preconditions: str
+    steps: list[str]
+    expected_result: str
+    status: str
+    created_at: datetime
+
+
+class DefectCreate(APIModel):
+    requirement_id: str | None = None
+    test_case_id: str | None = None
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(min_length=1)
+    severity: Literal["Critical", "High", "Medium", "Low"] = "Medium"
+
+
+class DefectUpdate(APIModel):
+    status: Literal["Open", "In progress", "Resolved", "Closed"]
+
+
+class DefectRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str | None
+    test_case_id: str | None
+    code: str
+    title: str
+    description: str
+    severity: str
+    status: str
+    created_at: datetime

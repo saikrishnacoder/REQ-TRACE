@@ -8,14 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models import AuditEvent, Project, Requirement, RequirementLink, SyncOutboxEvent
-from app.schemas import AuditEventRead, ProjectCreate, ProjectRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TraceabilityRead
+from app.models import AuditEvent, Defect, Project, Requirement, RequirementLink, SyncOutboxEvent, TestCase
+from app.schemas import AuditEventRead, DefectCreate, DefectRead, DefectUpdate, ProjectCreate, ProjectRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -42,7 +42,7 @@ app.add_middleware(
         "http://tauri.localhost",
         "tauri://localhost",
     ],
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
@@ -342,6 +342,85 @@ def delete_requirement_link(requirement_id: str, link_id: str, db: Session = Dep
     db.delete(link)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/api/v1/projects/{project_id}/test-cases", response_model=list[TestCaseRead])
+def list_test_cases(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list(db.scalars(select(TestCase).where(TestCase.project_id == project_id).order_by(TestCase.created_at.desc())).all())
+
+
+@app.post("/api/v1/projects/{project_id}/test-cases", response_model=TestCaseRead, status_code=status.HTTP_201_CREATED)
+def create_test_case(project_id: str, payload: TestCaseCreate, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if payload.requirement_id:
+        requirement = db.get(Requirement, payload.requirement_id)
+        if requirement is None or requirement.project_id != project_id or requirement.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="Requirement must be active in this project")
+    count = db.scalar(select(func.count()).select_from(TestCase).where(TestCase.project_id == project_id)) or 0
+    test_case = TestCase(id=str(uuid.uuid4()), project_id=project_id, requirement_id=payload.requirement_id,
+        code=f"{project.key}-TC-{count + 1:03d}", title=payload.title.strip(),
+        preconditions=payload.preconditions.strip(), steps=[step.strip() for step in payload.steps if step.strip()],
+        expected_result=payload.expected_result.strip(), status="Ready", created_at=datetime.now(timezone.utc))
+    if not test_case.steps:
+        raise HTTPException(status_code=422, detail="At least one non-empty test step is required")
+    db.add(test_case)
+    append_audit(db, project_id, "test_case_created", payload.requirement_id, {"code": test_case.code, "title": test_case.title})
+    append_sync_event(db, "test_case.upsert", "test_case", test_case.id, TestCaseRead.model_validate(test_case).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(test_case)
+    return test_case
+
+
+@app.get("/api/v1/projects/{project_id}/defects", response_model=list[DefectRead])
+def list_defects(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list(db.scalars(select(Defect).where(Defect.project_id == project_id).order_by(Defect.created_at.desc())).all())
+
+
+@app.post("/api/v1/projects/{project_id}/defects", response_model=DefectRead, status_code=status.HTTP_201_CREATED)
+def create_defect(project_id: str, payload: DefectCreate, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if payload.requirement_id:
+        requirement = db.get(Requirement, payload.requirement_id)
+        if requirement is None or requirement.project_id != project_id or requirement.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="Requirement must be active in this project")
+    if payload.test_case_id:
+        test_case = db.get(TestCase, payload.test_case_id)
+        if test_case is None or test_case.project_id != project_id:
+            raise HTTPException(status_code=422, detail="Test case must belong to this project")
+    count = db.scalar(select(func.count()).select_from(Defect).where(Defect.project_id == project_id)) or 0
+    defect = Defect(id=str(uuid.uuid4()), project_id=project_id, requirement_id=payload.requirement_id,
+        test_case_id=payload.test_case_id, code=f"{project.key}-BUG-{count + 1:03d}",
+        title=payload.title.strip(), description=payload.description.strip(), severity=payload.severity, status="Open",
+        created_at=datetime.now(timezone.utc))
+    db.add(defect)
+    append_audit(db, project_id, "defect_created", payload.requirement_id, {"code": defect.code, "severity": defect.severity})
+    append_sync_event(db, "defect.upsert", "defect", defect.id, DefectRead.model_validate(defect).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(defect)
+    return defect
+
+
+@app.patch("/api/v1/defects/{defect_id}", response_model=DefectRead)
+def update_defect(defect_id: str, payload: DefectUpdate, db: Session = Depends(get_db)):
+    defect = db.get(Defect, defect_id)
+    if defect is None:
+        raise HTTPException(status_code=404, detail="Defect not found")
+    previous = defect.status
+    defect.status = payload.status
+    append_audit(db, defect.project_id, "defect_status_changed", defect.requirement_id,
+        {"code": defect.code, "from": previous, "to": defect.status})
+    append_sync_event(db, "defect.upsert", "defect", defect.id, DefectRead.model_validate(defect).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(defect)
+    return defect
 
 
 @app.get("/")

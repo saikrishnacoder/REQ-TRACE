@@ -8,8 +8,8 @@ import {
   Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { getTraceability } from './services/persistence';
-import type { TraceabilitySnapshot } from './services/persistence';
+import { createDefect, createTestCase, getDefects, getTestCases, getTraceability, updateDefect } from './services/persistence';
+import type { DefectRecord, TestCaseRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -270,6 +270,8 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
+          <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
+          <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
           <NavLink to="/intake" aria-label="Intake" title="Intake" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Inbox size={17} /><span>Intake</span></NavLink>
           <NavLink to="/project" aria-label="Project settings" title="Project settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Settings2 size={17} /><span>Project settings</span></NavLink>
         </nav>
@@ -295,6 +297,8 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} />} />
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
+            <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
+            <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/intake" element={<IntakePage project={props.project} createRequirement={props.createRequirement} />} />
             <Route path="/project" element={<ProjectSettings project={props.project} />} />
             <Route path="/new-project" element={<NewProjectPage onCreate={(record) => { props.onCreateProject(record); navigate('/'); }} />} />
@@ -620,6 +624,43 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
         })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{snapshot ? orphanIds.has(item.id) ? <span className="trace-state orphan">Unlinked</span> : <span className="trace-state linked">Linked</span> : <span className="trace-state unknown">Unavailable</span>}</td></tr>;
       })}</tbody></table></div>}
     </section>
+  </div>;
+}
+
+function TestCasesPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+  const [records, setRecords] = useState<TestCaseRecord[]>([]);
+  const [title, setTitle] = useState('');
+  const [preconditions, setPreconditions] = useState('');
+  const [steps, setSteps] = useState('');
+  const [expected, setExpected] = useState('');
+  const [requirementId, setRequirementId] = useState('');
+  const [error, setError] = useState('');
+  const refresh = () => getTestCases(project.id).then(setRecords).catch(() => setError('Test cases require the local API to be available.'));
+  useEffect(() => { void refresh(); }, [project.id]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      await createTestCase(project.id, { requirementId: requirementId || null, title, preconditions, steps: steps.split('\n').map((x) => x.trim()).filter(Boolean), expectedResult: expected });
+      setTitle(''); setPreconditions(''); setSteps(''); setExpected(''); setError(''); await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save test case.'); }
+  };
+  return <div className="narrow-page"><div className="eyebrow">VERIFICATION · {project.key}</div><h1 className="page-heading">Test cases</h1><p className="page-subheading">Create persisted manual checks and connect them to requirements.</p>
+    {error && <div className="sync-alert" role="status">{error}</div>}
+    <section className="surface form-surface"><form className="form-stack" onSubmit={submit}><label>Test case title<input required maxLength={300} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Reject expired payment card" /></label><label>Requirement <span className="optional">Optional</span><select value={requirementId} onChange={(e) => setRequirementId(e.target.value)}><option value="">Unlinked</option>{requirements.map((r) => <option key={r.id} value={r.id}>{r.code} · {r.title}</option>)}</select></label><label>Preconditions<textarea rows={2} value={preconditions} onChange={(e) => setPreconditions(e.target.value)} /></label><label>Steps <small>One step per line</small><textarea required rows={4} value={steps} onChange={(e) => setSteps(e.target.value)} placeholder={'Open checkout\nEnter expired card details\nSubmit payment'} /></label><label>Expected result<textarea required rows={2} value={expected} onChange={(e) => setExpected(e.target.value)} /></label><button className="button button-primary" type="submit"><Plus size={15} /> Save test case</button></form></section>
+    <section className="surface trace-matrix-surface"><div className="section-heading"><div><span className="eyebrow">TEST INVENTORY</span><h2>{records.length} test cases</h2></div></div>{records.length === 0 ? <EmptyState icon={<ListChecks size={18} />} title="No test cases yet" text="Add a manual test case above to start connecting requirements to verification." /> : records.map((r) => <article className="test-case-card" key={r.id}><span className="requirement-id">{r.code} · {r.requirementId ? requirements.find((x) => x.id === r.requirementId)?.code ?? 'Requirement' : 'Unlinked'}</span><h3>{r.title}</h3><ol>{r.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p><b>Expected:</b> {r.expectedResult}</p></article>)}</section>
+  </div>;
+}
+
+function DefectsPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+  const [records, setRecords] = useState<DefectRecord[]>([]);
+  const [title, setTitle] = useState(''); const [description, setDescription] = useState(''); const [severity, setSeverity] = useState('Medium'); const [requirementId, setRequirementId] = useState(''); const [error, setError] = useState('');
+  const refresh = () => getDefects(project.id).then(setRecords).catch(() => setError('Defects require the local API to be available.'));
+  useEffect(() => { void refresh(); }, [project.id]);
+  const submit = async (event: FormEvent) => { event.preventDefault(); try { await createDefect(project.id, { requirementId: requirementId || null, testCaseId: null, title, description, severity }); setTitle(''); setDescription(''); setError(''); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not save defect.'); } };
+  const changeStatus = async (id: string, status: string) => { try { await updateDefect(id, status); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not update defect.'); } };
+  return <div className="narrow-page"><div className="eyebrow">ISSUE TRACKING · {project.key}</div><h1 className="page-heading">Defects</h1><p className="page-subheading">Record issues with severity and requirement context, then track their status.</p>{error && <div className="sync-alert" role="status">{error}</div>}
+    <section className="surface form-surface"><form className="form-stack" onSubmit={submit}><label>Defect title<input required maxLength={300} value={title} onChange={(e) => setTitle(e.target.value)} /></label><label>Description<textarea required rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></label><div className="field-grid"><label>Severity<select value={severity} onChange={(e) => setSeverity(e.target.value)}>{['Critical','High','Medium','Low'].map((s) => <option key={s}>{s}</option>)}</select></label><label>Requirement <span className="optional">Optional</span><select value={requirementId} onChange={(e) => setRequirementId(e.target.value)}><option value="">Unlinked</option>{requirements.map((r) => <option key={r.id} value={r.id}>{r.code} · {r.title}</option>)}</select></label></div><button className="button button-primary" type="submit"><Plus size={15} /> Report defect</button></form></section>
+    <section className="surface trace-matrix-surface"><div className="section-heading"><div><span className="eyebrow">DEFECT REGISTER</span><h2>{records.length} defects</h2></div></div>{records.length === 0 ? <EmptyState icon={<CircleHelp size={18} />} title="No defects reported" text="Reported defects will be listed here with their requirement links and current status." /> : records.map((d) => <article className="test-case-card" key={d.id}><div className="settings-line"><span>{d.code} · {d.severity}</span><select aria-label={`Status for ${d.code}`} value={d.status} onChange={(e) => void changeStatus(d.id, e.target.value)}>{['Open','In progress','Resolved','Closed'].map((s) => <option key={s}>{s}</option>)}</select></div><h3>{d.title}</h3><p>{d.description}</p><small>{d.requirementId ? requirements.find((r) => r.id === d.requirementId)?.code ?? 'Linked requirement' : 'No requirement link'}</small></article>)}</section>
   </div>;
 }
 

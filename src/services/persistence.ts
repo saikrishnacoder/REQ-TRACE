@@ -186,3 +186,11 @@ export async function queueWrite(method: PendingWrite['method'], path: string, b
 export async function getTraceability(projectId: string) {
   return request<TraceabilitySnapshot>(`/projects/${projectId}/traceability`);
 }
+
+export interface TestCaseRecord { id: string; projectId: string; requirementId: string | null; code: string; title: string; preconditions: string; steps: string[]; expectedResult: string; status: string; createdAt: string }
+export interface DefectRecord { id: string; projectId: string; requirementId: string | null; testCaseId: string | null; code: string; title: string; description: string; severity: string; status: string; createdAt: string }
+export const getTestCases = (projectId: string) => request<TestCaseRecord[]>(`/projects/${projectId}/test-cases`);
+export const createTestCase = (projectId: string, payload: { requirementId: string | null; title: string; preconditions: string; steps: string[]; expectedResult: string }) => request<TestCaseRecord>(`/projects/${projectId}/test-cases`, { method: 'POST', body: JSON.stringify(payload) });
+export const getDefects = (projectId: string) => request<DefectRecord[]>(`/projects/${projectId}/defects`);
+export const createDefect = (projectId: string, payload: { requirementId: string | null; testCaseId: string | null; title: string; description: string; severity: string }) => request<DefectRecord>(`/projects/${projectId}/defects`, { method: 'POST', body: JSON.stringify(payload) });
+export const updateDefect = (id: string, status: string) => request<DefectRecord>(`/defects/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });

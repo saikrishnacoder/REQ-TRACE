@@ -173,3 +173,41 @@ def test_requirement_links_are_persisted_and_scoped_to_a_project(client: TestCli
     assert duplicate.status_code == 409
     assert client.delete(f"/api/v1/requirements/{source['id']}/links/{link_response.json()['id']}").status_code == 204
     assert len(client.get(f"/api/v1/projects/{project['id']}/traceability").json()["orphanRequirementIds"]) == 2
+
+
+def test_test_cases_and_defects_are_persisted_and_audited(client: TestClient) -> None:
+    project = client.post("/api/v1/projects", json={"name": "QA", "key": "QA"}).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Sign in", "statement": "Users can sign in.", "type": "Functional", "priority": "High",
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Users can sign in.",
+    }).json()
+    test_case = client.post(f"/api/v1/projects/{project['id']}/test-cases", json={
+        "requirementId": requirement["id"], "title": "Valid sign in", "steps": ["Open form", "Submit valid credentials"],
+        "expectedResult": "Dashboard is shown",
+    })
+    assert test_case.status_code == 201
+    assert test_case.json()["code"] == "QA-TC-001"
+    defect = client.post(f"/api/v1/projects/{project['id']}/defects", json={
+        "requirementId": requirement["id"], "testCaseId": test_case.json()["id"],
+        "title": "Submit button does nothing", "description": "The form remains unchanged.", "severity": "High",
+    })
+    assert defect.status_code == 201
+    assert defect.json()["code"] == "QA-BUG-001"
+    assert client.patch(f"/api/v1/defects/{defect.json()['id']}", json={"status": "Resolved"}).json()["status"] == "Resolved"
+    assert len(client.get(f"/api/v1/projects/{project['id']}/test-cases").json()) == 1
+    assert len(client.get(f"/api/v1/projects/{project['id']}/defects").json()) == 1
+    actions = {item["action"] for item in client.get(f"/api/v1/projects/{project['id']}/audit").json()}
+    assert {"test_case_created", "defect_created", "defect_status_changed"} <= actions
+
+
+def test_test_case_rejects_cross_project_requirement(client: TestClient) -> None:
+    first = client.post("/api/v1/projects", json={"name": "One", "key": "ONE"}).json()
+    second = client.post("/api/v1/projects", json={"name": "Two", "key": "TWO"}).json()
+    requirement = client.post(f"/api/v1/projects/{first['id']}/requirements", json={
+        "title": "Feature", "statement": "Feature works.", "type": "Functional", "priority": "Low",
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Feature works.",
+    }).json()
+    response = client.post(f"/api/v1/projects/{second['id']}/test-cases", json={
+        "requirementId": requirement["id"], "title": "Cross scope", "steps": ["Check"], "expectedResult": "Pass",
+    })
+    assert response.status_code == 422

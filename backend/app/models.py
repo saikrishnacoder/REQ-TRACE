@@ -112,3 +112,35 @@ class RequirementLink(Base):
     target_requirement_id: Mapped[str] = mapped_column("TARGET_REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
     relationship_type: Mapped[str] = mapped_column("RELATIONSHIP_TYPE", String(24), nullable=False, default="depends_on")
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class TestCase(Base):
+    __tablename__ = "RT_TEST_CASES"
+    __table_args__ = (UniqueConstraint("PROJECT_ID", "CASE_CODE", name="UQ_RT_TEST_PROJECT_CODE"),)
+
+    id: Mapped[str] = mapped_column("TEST_CASE_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str | None] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="SET NULL"), nullable=True)
+    code: Mapped[str] = mapped_column("CASE_CODE", String(40), nullable=False)
+    title: Mapped[str] = mapped_column("TITLE", String(300), nullable=False)
+    preconditions: Mapped[str] = mapped_column("PRECONDITIONS", Text, nullable=False, default="")
+    steps: Mapped[list[str]] = mapped_column("STEPS", JSONText(), nullable=False)
+    expected_result: Mapped[str] = mapped_column("EXPECTED_RESULT", Text, nullable=False)
+    status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False, default="Ready")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class Defect(Base):
+    __tablename__ = "RT_DEFECTS"
+    __table_args__ = (UniqueConstraint("PROJECT_ID", "DEFECT_CODE", name="UQ_RT_DEFECT_PROJECT_CODE"),)
+
+    id: Mapped[str] = mapped_column("DEFECT_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str | None] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="SET NULL"), nullable=True)
+    test_case_id: Mapped[str | None] = mapped_column("TEST_CASE_ID", String(36), ForeignKey("RT_TEST_CASES.TEST_CASE_ID", ondelete="SET NULL"), nullable=True)
+    code: Mapped[str] = mapped_column("DEFECT_CODE", String(40), nullable=False)
+    title: Mapped[str] = mapped_column("TITLE", String(300), nullable=False)
+    description: Mapped[str] = mapped_column("DESCRIPTION", Text, nullable=False)
+    severity: Mapped[str] = mapped_column("SEVERITY", String(20), nullable=False, default="Medium")
+    status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False, default="Open")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

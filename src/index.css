@@ -479,3 +479,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .trace-link-form .button { width: 100%; }
   .trace-table { min-width: 700px; }
 }
+.test-case-card { border-top: 1px solid var(--line, #263046); padding: 18px 20px; }
+.test-case-card:first-of-type { border-top: 0; }
+.test-case-card h3 { margin: 8px 0; color: var(--text, #eef1f8); font-size: 15px; }
+.test-case-card p { color: var(--muted, #a2abc0); line-height: 1.55; }
+.test-case-card ol { color: var(--muted, #a2abc0); padding-left: 22px; line-height: 1.65; }
+.test-case-card .settings-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; }

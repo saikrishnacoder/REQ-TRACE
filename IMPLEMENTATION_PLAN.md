@@ -54,3 +54,14 @@ records link audit events, and reports linked/orphan requirements. API,
 migration, and packaged-sidecar checks cover these workflows. AI, GitHub,
 test/defect management, full multi-entity traceability, reports, and automation
 remain future phases; see the audit report for sequencing and boundaries.
+
+## Test management and defect register slice (2026-11-17)
+
+The next phase now has a first vertical slice: test cases store preconditions,
+ordered steps, expected results, and an optional requirement link; defects store
+severity/status and optional requirement/test-case links. Both are
+project-scoped, audited, and covered by Alembic revision `20261117_0004`.
+The `/tests` and `/defects` routes provide create/list/status workflows.
+Automated execution, run evidence, richer defect editing, and full traceability
+visualization remain outstanding. The new slice passes the API and migration
+tests and TypeScript check; a fresh sidecar/installer build is still required.
