@@ -8,8 +8,8 @@ import {
   Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createGitHubRequirementLink, createTestCase, createTestExecution, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
-import type { AuditRecord, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
+import type { AuditRecord, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -40,6 +40,7 @@ interface Requirement {
   originalText: string;
   status: RequirementStatus;
   createdAt: string;
+  updatedAt?: string;
   reviewedAt?: string;
 }
 
@@ -88,6 +89,7 @@ function normalizeRequirements(projects: Project[]): Requirement[] {
       originalText,
       status,
       createdAt: String(entry.createdAt ?? new Date().toISOString()),
+      updatedAt: String(entry.updatedAt ?? entry.createdAt ?? new Date().toISOString()),
       reviewedAt: typeof entry.reviewedAt === 'string' ? entry.reviewedAt : undefined,
     };
   }).filter((item) => item.projectId);
@@ -161,7 +163,7 @@ function App() {
   };
 
   const updateRequirement = (id: string, updates: Partial<Requirement>) => {
-    setRequirements((items) => items.map((item) => item.id === id ? { ...item, ...updates } : item));
+    setRequirements((items) => items.map((item) => item.id === id ? { ...item, ...updates, updatedAt: new Date().toISOString() } : item));
     void queueWrite('PATCH', `/requirements/${id}`, updates as Record<string, unknown>).then(updateConnectionStatus);
   };
 
@@ -539,6 +541,14 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
   const [preconditions, setPreconditions] = useState(requirement.preconditions);
   const [criteria, setCriteria] = useState(requirement.acceptanceCriteria.join('\n'));
   const [saved, setSaved] = useState(false);
+  const [versions, setVersions] = useState<RequirementVersionRecord[]>([]);
+  const [comments, setComments] = useState<RequirementCommentRecord[]>([]);
+  const [commentText, setCommentText] = useState('');
+  const [historyError, setHistoryError] = useState('');
+  const [commentBusy, setCommentBusy] = useState(false);
+  const refreshHistory = async () => { try { const [versionRows, commentRows] = await Promise.all([getRequirementVersions(requirement.id), getRequirementComments(requirement.id)]); setVersions(versionRows); setComments(commentRows); setHistoryError(''); } catch { setHistoryError('Version history and comments are unavailable while the local API is offline.'); } };
+  useEffect(() => { void refreshHistory(); }, [requirement.id, requirement.updatedAt]);
+  const addComment = async (event: FormEvent) => { event.preventDefault(); if (!commentText.trim()) return; setCommentBusy(true); try { await createRequirementComment(requirement.id, commentText); setCommentText(''); await refreshHistory(); } catch (e) { setHistoryError(e instanceof Error ? e.message : 'Could not save comment.'); } finally { setCommentBusy(false); } };
   const locked = requirement.status === 'Approved' || requirement.status === 'Rejected';
   const editedFields = () => ({ title: title.trim(), statement: statement.trim(), type, priority, actor: actor.trim(), preconditions: preconditions.trim(), acceptanceCriteria: criteria.split('\n').map((value) => value.trim()).filter(Boolean) });
   const save = () => { if (!title.trim() || !statement.trim()) return; onSave(editedFields()); setSaved(true); };
@@ -557,6 +567,8 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
       <label>Acceptance criteria <span className="optional">One per line</span><textarea disabled={locked} rows={4} value={criteria} onChange={(event) => setCriteria(event.target.value)} /></label>
       <div className="original-text"><b>Original wording</b><p>{requirement.originalText}</p></div>
       {saved && <div className="save-confirmation"><Check size={14} /> Draft changes saved.</div>}
+      <section className="drawer-record-history"><div className="section-heading"><div><span className="eyebrow">VERSION HISTORY</span><h3>{versions.length} saved versions</h3></div></div>{versions.length ? versions.map((version) => <details className="requirement-version" key={version.id}><summary><b>Version {version.versionNumber}</b><span>{String(version.snapshot.status ?? '')}</span><small>{dateLabel(version.createdAt)}</small></summary><p>{String(version.snapshot.title ?? '')}</p><small>{String(version.snapshot.statement ?? '')}</small></details>) : <p className="history-empty">No versions are available yet.</p>}</section>
+      <section className="drawer-comments"><div className="section-heading"><div><span className="eyebrow">DISCUSSION</span><h3>{comments.length} comments</h3></div></div>{comments.map((comment) => <article className="requirement-comment" key={comment.id}><div><b>{comment.author}</b><small>{dateLabel(comment.createdAt)}</small></div><p>{comment.content}</p></article>)}<form onSubmit={addComment}><textarea rows={2} maxLength={5000} value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Add a project comment…" /><button className="button button-secondary button-small" disabled={commentBusy || !commentText.trim()}>{commentBusy ? 'Saving…' : 'Add comment'}</button></form>{historyError && <small className="history-error">{historyError}</small>}</section>
     </div>
     {!locked && <div className="drawer-footer">{requirement.status === 'Draft' ? <><button className="button button-secondary" onClick={save}>Save draft</button><button className="button button-primary" onClick={submitForReview}>Submit for review<ArrowRight size={14} /></button></> : <><button className="button button-secondary" onClick={reject}>Reject</button><button className="button button-secondary" onClick={save}>Save changes</button><button className="button button-primary" onClick={approve}><Check size={15} /> Approve</button></>}</div>}
   </aside></div>;

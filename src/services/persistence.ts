@@ -223,3 +223,8 @@ export const getAutomationRules = (projectId: string) => request<AutomationRuleR
 export const setAutomationRule = (projectId: string, key: AutomationRuleRecord['ruleKey'], enabled: boolean) => request<AutomationRuleRecord>(`/projects/${projectId}/automation/rules/${key}`, { method: 'PUT', body: JSON.stringify({ enabled }) });
 export const runAutomationRule = (projectId: string, key: AutomationRuleRecord['ruleKey']) => request<AutomationRunRecord>(`/projects/${projectId}/automation/rules/${key}/run`, { method: 'POST' });
 export const getAutomationRuns = (projectId: string) => request<AutomationRunRecord[]>(`/projects/${projectId}/automation/runs`);
+export interface RequirementVersionRecord { id: string; projectId: string; requirementId: string; versionNumber: number; snapshot: Record<string, unknown>; createdAt: string }
+export interface RequirementCommentRecord { id: string; projectId: string; requirementId: string; author: string; content: string; createdAt: string }
+export const getRequirementVersions = (id: string) => request<RequirementVersionRecord[]>(`/requirements/${id}/versions`);
+export const getRequirementComments = (id: string) => request<RequirementCommentRecord[]>(`/requirements/${id}/comments`);
+export const createRequirementComment = (id: string, content: string) => request<RequirementCommentRecord>(`/requirements/${id}/comments`, { method: 'POST', body: JSON.stringify({ content }) });

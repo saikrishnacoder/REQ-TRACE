@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
+from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -161,6 +161,10 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
         updated_at=created_at,
     )
     db.add(requirement)
+    initial_snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
+    version = RequirementVersion(id=str(uuid.uuid4()), project_id=project_id, requirement_id=requirement.id,
+        version_number=1, snapshot_json=json.dumps(initial_snapshot, ensure_ascii=False), created_at=created_at)
+    db.add(version)
     append_audit(db, project_id, "requirement_created", requirement.id, {"code": code, "sourceType": payload.source_type})
     append_sync_event(db, "requirement.upsert", "requirement", requirement.id, {
         "id": requirement.id,
@@ -181,6 +185,9 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
         "updatedAt": created_at.isoformat(),
         "reviewedAt": None,
     })
+    append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+        {"id": version.id, "projectId": project_id, "requirementId": requirement.id,
+         "versionNumber": 1, "snapshot": initial_snapshot, "createdAt": created_at.isoformat()})
     try:
         db.commit()
         db.refresh(requirement)
@@ -207,6 +214,7 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
     if requested_status and requested_status not in allowed[requirement.status]:
         raise HTTPException(status_code=409, detail=f"Invalid status change: {requirement.status} → {requested_status}")
 
+    current_version = db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0
     for field, value in updates.items():
         if value is not None:
             setattr(requirement, field, value)
@@ -221,6 +229,12 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
         "Approved": "requirement_approved",
         "Rejected": "requirement_rejected",
     }.get(requested_status, "requirement_updated")
+    version_created_at = datetime.now(timezone.utc)
+    current_snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
+    version = RequirementVersion(id=str(uuid.uuid4()), project_id=requirement.project_id, requirement_id=requirement.id,
+        version_number=current_version + 1, snapshot_json=json.dumps(current_snapshot, ensure_ascii=False),
+        created_at=version_created_at)
+    db.add(version)
     append_audit(db, requirement.project_id, action, requirement.id, {"fields": sorted(updates), "status": requested_status})
     append_sync_event(
         db,
@@ -229,6 +243,10 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
         requirement.id,
         RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True),
     )
+    append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+        {"id": version.id, "projectId": requirement.project_id, "requirementId": requirement.id,
+         "versionNumber": version.version_number, "snapshot": current_snapshot,
+         "createdAt": version.created_at.isoformat()})
     db.commit()
     db.refresh(requirement)
     return requirement
@@ -861,6 +879,45 @@ def set_automation_rule(project_id: str, rule_key: str, payload: AutomationRuleU
     db.commit()
     db.refresh(rule)
     return rule
+
+
+@app.get("/api/v1/requirements/{requirement_id}/versions", response_model=list[RequirementVersionRead])
+def list_requirement_versions(requirement_id: str, db: Session = Depends(get_db)):
+    if db.get(Requirement, requirement_id) is None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    versions = db.scalars(select(RequirementVersion).where(RequirementVersion.requirement_id == requirement_id)
+        .order_by(RequirementVersion.version_number.desc())).all()
+    return [{"id": item.id, "project_id": item.project_id, "requirement_id": item.requirement_id,
+        "version_number": item.version_number, "snapshot": json.loads(item.snapshot_json), "created_at": item.created_at} for item in versions]
+
+
+@app.get("/api/v1/requirements/{requirement_id}/comments", response_model=list[RequirementCommentRead])
+def list_requirement_comments(requirement_id: str, db: Session = Depends(get_db)):
+    if db.get(Requirement, requirement_id) is None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    return list(db.scalars(select(RequirementComment).where(RequirementComment.requirement_id == requirement_id)
+        .order_by(RequirementComment.created_at.desc())).all())
+
+
+@app.post("/api/v1/requirements/{requirement_id}/comments", response_model=RequirementCommentRead, status_code=status.HTTP_201_CREATED)
+def create_requirement_comment(requirement_id: str, payload: RequirementCommentCreate, db: Session = Depends(get_db)):
+    requirement = db.get(Requirement, requirement_id)
+    if requirement is None or requirement.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Active requirement not found")
+    comment = RequirementComment(id=str(uuid.uuid4()), project_id=requirement.project_id,
+        requirement_id=requirement.id, author=payload.author.strip(), content=payload.content.strip(),
+        created_at=datetime.now(timezone.utc))
+    if not comment.author or not comment.content:
+        raise HTTPException(status_code=422, detail="Comment author and content cannot be blank")
+    db.add(comment)
+    append_audit(db, requirement.project_id, "requirement_comment_created", requirement.id,
+        {"commentId": comment.id, "author": comment.author})
+    append_sync_event(db, "requirement_comment.created", "requirement_comment", comment.id,
+        {"id": comment.id, "projectId": comment.project_id, "requirementId": comment.requirement_id,
+         "author": comment.author, "content": comment.content, "createdAt": comment.created_at.isoformat()})
+    db.commit()
+    db.refresh(comment)
+    return comment
 
 
 @app.get("/api/v1/projects/{project_id}/automation/runs", response_model=list[AutomationRunRead])

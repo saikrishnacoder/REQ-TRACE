@@ -255,3 +255,28 @@ class AutomationRun(Base):
     result_json: Mapped[str] = mapped_column("RESULT_JSON", Text, nullable=False)
     detail: Mapped[str] = mapped_column("DETAIL", Text, nullable=False, default="")
     executed_at: Mapped[datetime] = mapped_column("EXECUTED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class RequirementVersion(Base):
+    __tablename__ = "RT_REQUIREMENT_VERSIONS"
+    __table_args__ = (UniqueConstraint("REQUIREMENT_ID", "VERSION_NUMBER", name="UQ_RT_REQ_VERSION_NUM"),
+        Index("IX_RT_REQ_VERSION_TIME", "REQUIREMENT_ID", "CREATED_AT"))
+
+    id: Mapped[str] = mapped_column("VERSION_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    version_number: Mapped[int] = mapped_column("VERSION_NUMBER", Integer, nullable=False)
+    snapshot_json: Mapped[str] = mapped_column("SNAPSHOT_JSON", Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class RequirementComment(Base):
+    __tablename__ = "RT_REQUIREMENT_COMMENTS"
+    __table_args__ = (Index("IX_RT_REQ_COMMENT_TIME", "REQUIREMENT_ID", "CREATED_AT"),)
+
+    id: Mapped[str] = mapped_column("COMMENT_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    author: Mapped[str] = mapped_column("AUTHOR", String(120), nullable=False)
+    content: Mapped[str] = mapped_column("CONTENT", Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

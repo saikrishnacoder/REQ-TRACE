@@ -136,3 +136,13 @@ No automatic notifications, schedules, or write actions run. API tests cover
 enablement, execution results, disabled-run rejection, and history. Installer
 packaging and sidecar smoke test pass; TypeScript and all 16 backend tests
 pass. The refreshed 28.87 MiB installer includes this migration.
+
+## Requirement history and discussion slice
+
+Revision `20261117_0010` adds immutable requirement snapshots and project
+comments. Requirement creation stores the initial snapshot; every accepted
+update stores the resulting version. The requirement drawer shows version
+history and supports comments. Both changes generate audit and sync-outbox
+records. Initial history and comment endpoints are covered by API tests.
+All 16 backend tests and TypeScript checks pass, and the refreshed 28.87 MiB
+installer passed the packaged-sidecar migration/health smoke test.

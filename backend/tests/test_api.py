@@ -81,6 +81,12 @@ def test_project_and_requirement_review_flow_is_persisted(client: TestClient) ->
         "requirement_created",
         "project_created",
     }
+    versions = client.get(f"/api/v1/requirements/{requirement['id']}/versions").json()
+    assert [item["versionNumber"] for item in versions] == [3, 2, 1]
+    assert [item["snapshot"]["status"] for item in versions] == ["Approved", "Under review", "Draft"]
+    comment = client.post(f"/api/v1/requirements/{requirement['id']}/comments", json={"content": "Verify timeout behavior."})
+    assert comment.status_code == 201
+    assert client.get(f"/api/v1/requirements/{requirement['id']}/comments").json()[0]["content"] == "Verify timeout behavior."
 
 
 def test_review_state_machine_rejects_skipping_review(client: TestClient) -> None:

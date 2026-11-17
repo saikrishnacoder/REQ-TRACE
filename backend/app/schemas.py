@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -297,6 +297,29 @@ class AutomationRunRead(APIModel):
     findings: list[str]
     detail: str
     executed_at: datetime
+
+
+class RequirementVersionRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str
+    version_number: int
+    snapshot: dict[str, Any]
+    created_at: datetime
+
+
+class RequirementCommentCreate(APIModel):
+    content: str = Field(min_length=1, max_length=5000)
+    author: str = Field(default="Local user", min_length=1, max_length=120)
+
+
+class RequirementCommentRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str
+    author: str
+    content: str
+    created_at: datetime
 
 
 class AnalysisIssue(APIModel):
