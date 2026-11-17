@@ -239,6 +239,44 @@ class AssistantReply(APIModel):
     assistant_message: ConversationMessageRead
 
 
+class GitHubRepositorySelect(APIModel):
+    full_name: str = Field(min_length=3, max_length=300, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+class GitHubRepositoryRead(APIModel):
+    id: str
+    project_id: str
+    full_name: str
+    html_url: str
+    default_branch: str
+    synced_at: datetime | None
+
+
+class GitHubRecordRead(APIModel):
+    id: str
+    project_id: str
+    repository_id: str
+    record_type: Literal["issue", "pull_request", "commit", "branch"]
+    external_id: str
+    title: str
+    state: str
+    html_url: str
+    updated_at: datetime | None
+
+
+class GitHubLinkCreate(APIModel):
+    record_id: str = Field(min_length=1, max_length=36)
+
+
+class GitHubLinkRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str
+    record_id: str
+    created_at: datetime
+    record: GitHubRecordRead
+
+
 class AnalysisIssue(APIModel):
     category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
     explanation: str = Field(min_length=1, max_length=1000)

@@ -3,13 +3,13 @@ import type { FormEvent, ReactNode } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown,
-  CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Inbox, Layers3,
+  CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Github, Inbox, Layers3,
   ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
   Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getConversationMessages, getConversations, getDefects, getProjectAudit, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, sendAssistantMessage, updateDefect } from './services/persistence';
-import type { AuditRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createGitHubRequirementLink, createTestCase, createTestExecution, getAvailableGitHubRepositories, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, sendAssistantMessage, syncGitHubRepository, updateDefect } from './services/persistence';
+import type { AuditRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -271,6 +271,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
           <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
           <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
+          <NavLink to="/github" aria-label="GitHub integration" title="GitHub integration" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Github size={17} /><span>GitHub</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
@@ -300,6 +301,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
+            <Route path="/github" element={<GitHubPage project={props.project} requirements={props.requirements} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
@@ -665,6 +667,43 @@ function AssistantPage({ project }: { project: Project }) {
     {error && <div className="sync-alert" role="status">{error}</div>}
     <div className="assistant-layout"><aside className="surface assistant-conversations"><div className="section-heading"><div><span className="eyebrow">HISTORY</span><h2>Conversations</h2></div><button className="button button-secondary button-small" onClick={() => { setActiveId(''); setMessages([]); setError(''); }}>New</button></div>{conversations.map((item) => <button className={`ai-requirement-row${activeId === item.id ? ' active' : ''}`} key={item.id} onClick={() => void selectConversation(item.id)}><b>{item.title}</b><small>{dateLabel(item.updatedAt)}</small></button>)}</aside>
       <section className="surface assistant-thread"><div className="assistant-messages">{messages.length === 0 ? <EmptyState icon={<MessageSquareText size={18} />} title="Ask about this project" text="Try “Which requirements have test cases?” or “Summarize the open defects.”" /> : messages.map((message) => <article className={`assistant-message ${message.role}`} key={message.id}><b>{message.role === 'user' ? 'You' : `ReqTrace · ${message.provider}`}</b><p>{message.content}</p>{message.sources.length > 0 && <div className="assistant-sources"><span>Sources</span>{message.sources.map((source) => <Link key={source.id} to={source.path}>{source.code} · {source.title}</Link>)}</div>}</article>)}</div><form className="assistant-composer" onSubmit={send}><textarea rows={3} maxLength={10000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask a question grounded in this project…" /><div><small>Answers are based on stored project records and may include recommendations when an AI provider is configured.</small><button className="button button-primary" disabled={busy || !draft.trim()} type="submit">{busy ? 'Thinking…' : 'Send'}<ArrowRight size={14} /></button></div></form></section></div>
+  </div>;
+}
+
+function GitHubPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [available, setAvailable] = useState<{ fullName: string; htmlUrl: string; defaultBranch: string; private: boolean }[]>([]);
+  const [repositories, setRepositories] = useState<GitHubRepositoryRecord[]>([]);
+  const [records, setRecords] = useState<GitHubRecord[]>([]);
+  const [links, setLinks] = useState<{ id: string; requirementId: string; recordId: string }[]>([]);
+  const [repository, setRepository] = useState('');
+  const [requirementId, setRequirementId] = useState('');
+  const [recordId, setRecordId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const refresh = async () => {
+    try {
+      const data = await getProjectGitHubData(project.id);
+      setRepositories(data.repositories); setRecords(data.records); setLinks(data.links);
+      if (data.records[0] && !data.records.some((item) => item.id === recordId)) setRecordId(data.records[0].id);
+    } catch { setError('Saved GitHub references are unavailable while the local API is offline.'); }
+  };
+  useEffect(() => { void (async () => {
+    try { const state = await getGitHubStatus(); setConfigured(state.configured); if (state.configured) setAvailable(await getAvailableGitHubRepositories()); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'GitHub configuration is unavailable.'); }
+  })(); }, [project.id]);
+  const connectAndSync = async () => { if (!repository) return; setBusy(true); setError(''); try { const result = await syncGitHubRepository(project.id, repository); await refresh(); setError(`Synced ${repository}: ${result.recordsImported} issues, pull requests, commits, and branches imported.`); } catch (e) { setError(e instanceof Error ? e.message : 'GitHub sync failed.'); } finally { setBusy(false); } };
+  const linkToRequirement = async () => { if (!recordId || !requirementId) return; setBusy(true); try { await createGitHubRequirementLink(requirementId, recordId); setError(''); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not link GitHub reference.'); } finally { setBusy(false); } };
+  const recordById = new Map(records.map((item) => [item.id, item]));
+  const requirementById = new Map(requirements.map((item) => [item.id, item]));
+  return <div className="github-page"><div className="eyebrow"><Github size={13} /> SOURCE CONTROL · {project.key}</div><h1 className="page-heading">GitHub integration</h1><p className="page-subheading">Import repository metadata and link issues, pull requests, commits, and branches to project requirements.</p>
+    <div className="ai-disclosure"><ShieldCheck size={16} /><span>Read-only, manual pull. Configure a fine-grained GitHub token in the backend environment with repository metadata, contents, issues, and pull request read permissions. The token remains server-side and is never returned to this app.</span></div>
+    {configured === false && <section className="surface github-setup"><div className="settings-icon"><Github size={18} /></div><h2>GitHub is not configured</h2><p>Add <code>GITHUB_TOKEN</code> to the ignored backend <code>.env</code> (or deployment environment), then restart the local API. Do not put the token in browser settings or commit it.</p><span className="phase-pill">No repository data has been synced</span></section>}
+    {error && <div className="sync-alert" role="status">{error}</div>}
+    {configured && <><section className="surface github-connect"><div className="section-heading"><div><span className="eyebrow">REPOSITORY ACCESS</span><h2>Choose a repository to sync</h2></div><span className="phase-pill">Server token · manual pull</span></div><div className="github-connect-row"><label>GitHub repository<select value={repository} onChange={(e) => setRepository(e.target.value)}><option value="">Choose repository</option>{available.map((item) => <option key={item.fullName} value={item.fullName}>{item.fullName}{item.private ? ' · private' : ''}</option>)}</select></label><button className="button button-primary" disabled={busy || !repository} onClick={() => void connectAndSync()}>{busy ? 'Syncing…' : 'Sync repository'}</button></div><div className="github-repo-list">{repositories.map((repo) => <div key={repo.id}><a href={repo.htmlUrl} target="_blank" rel="noreferrer">{repo.fullName}</a><span>Default branch: {repo.defaultBranch}</span><small>{repo.syncedAt ? `Last sync ${dateLabel(repo.syncedAt)}` : 'Not synced yet'}</small></div>)}</div></section>
+      <section className="surface github-connect"><div className="section-heading"><div><span className="eyebrow">TRACEABILITY</span><h2>Link a GitHub record</h2></div><span className="phase-pill">{records.length} stored references</span></div>{!records.length ? <EmptyState icon={<Github size={18} />} title="No imported repository data" text="Sync a repository to browse its issues, pull requests, commits, and branches." /> : <div className="trace-link-form"><label>Requirement<select value={requirementId} onChange={(e) => setRequirementId(e.target.value)}><option value="">Select a requirement</option>{requirements.map((r) => <option key={r.id} value={r.id}>{r.code} · {r.title}</option>)}</select></label><label>GitHub record<select value={recordId} onChange={(e) => setRecordId(e.target.value)}>{records.map((record) => <option key={record.id} value={record.id}>{record.recordType} · {record.externalId} · {record.title}</option>)}</select></label><button className="button button-primary" disabled={busy || !requirementId || !recordId} onClick={() => void linkToRequirement()}><Plus size={15} /> Link record</button></div>}
+        <div className="github-linked-list">{links.map((link) => { const record = recordById.get(link.recordId); const requirement = requirementById.get(link.requirementId); return record ? <div key={link.id}><span>{requirement?.code ?? 'Requirement'} ↔ {record.recordType}</span><a href={record.htmlUrl} target="_blank" rel="noreferrer">{record.externalId} · {record.title}<ArrowUpRight size={13} /></a></div> : null; })}</div>
+      </section></>}
   </div>;
 }
 

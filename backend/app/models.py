@@ -191,3 +191,43 @@ class ConversationMessage(Base):
     sources_json: Mapped[str] = mapped_column("SOURCES_JSON", Text, nullable=False, default="[]")
     provider: Mapped[str] = mapped_column("PROVIDER", String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class GitHubRepository(Base):
+    __tablename__ = "RT_GITHUB_REPOSITORIES"
+    __table_args__ = (UniqueConstraint("PROJECT_ID", "FULL_NAME", name="UQ_RT_GH_REPO_PROJECT"),)
+
+    id: Mapped[str] = mapped_column("REPOSITORY_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    full_name: Mapped[str] = mapped_column("FULL_NAME", String(300), nullable=False)
+    html_url: Mapped[str] = mapped_column("HTML_URL", String(1000), nullable=False)
+    default_branch: Mapped[str] = mapped_column("DEFAULT_BRANCH", String(255), nullable=False, default="main")
+    synced_at: Mapped[datetime | None] = mapped_column("SYNCED_AT", TIMESTAMP(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class GitHubRecord(Base):
+    __tablename__ = "RT_GITHUB_RECORDS"
+    __table_args__ = (UniqueConstraint("REPOSITORY_ID", "RECORD_TYPE", "EXTERNAL_ID", name="UQ_RT_GH_RECORD_EXT"),
+        Index("IX_RT_GH_RECORD_PROJECT", "PROJECT_ID", "REPOSITORY_ID", "RECORD_TYPE"))
+
+    id: Mapped[str] = mapped_column("RECORD_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    repository_id: Mapped[str] = mapped_column("REPOSITORY_ID", String(36), ForeignKey("RT_GITHUB_REPOSITORIES.REPOSITORY_ID", ondelete="CASCADE"), nullable=False)
+    record_type: Mapped[str] = mapped_column("RECORD_TYPE", String(20), nullable=False)
+    external_id: Mapped[str] = mapped_column("EXTERNAL_ID", String(100), nullable=False)
+    title: Mapped[str] = mapped_column("TITLE", String(500), nullable=False)
+    state: Mapped[str] = mapped_column("STATE", String(32), nullable=False, default="")
+    html_url: Mapped[str] = mapped_column("HTML_URL", String(1000), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=True)
+
+
+class GitHubLink(Base):
+    __tablename__ = "RT_GITHUB_LINKS"
+    __table_args__ = (UniqueConstraint("REQUIREMENT_ID", "RECORD_ID", name="UQ_RT_GH_LINK_PAIR"),)
+
+    id: Mapped[str] = mapped_column("LINK_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    record_id: Mapped[str] = mapped_column("RECORD_ID", String(36), ForeignKey("RT_GITHUB_RECORDS.RECORD_ID", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

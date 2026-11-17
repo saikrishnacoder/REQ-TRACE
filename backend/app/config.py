@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     ai_api_key: str = Field(default="", repr=False)
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4o-mini"
+    github_token: str = Field(default="", repr=False)
+    github_api_url: str = "https://api.github.com"
 
     @property
     def resolved_database_url(self) -> str | URL:

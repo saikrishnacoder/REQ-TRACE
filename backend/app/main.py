@@ -1,5 +1,6 @@
 import json
 import uuid
+from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest, urlopen
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models import AuditEvent, Conversation, ConversationMessage, Defect, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
+from app.models import AuditEvent, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -660,6 +661,165 @@ def send_assistant_message(project_id: str, payload: AssistantMessageCreate, db:
     db.refresh(assistant_message)
     return {"conversation": conversation, "user_message": assistant_message_response(user_message),
         "assistant_message": assistant_message_response(assistant_message)}
+
+
+def github_api_get(path: str):
+    if not settings.github_token.strip():
+        raise HTTPException(status_code=503, detail="GitHub is not configured. Set GITHUB_TOKEN in the backend environment.")
+    request = URLRequest(f"{settings.github_api_url.rstrip('/')}/{path.lstrip('/')}", headers={
+        "Authorization": f"Bearer {settings.github_token}", "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ReqTrace-AI",
+    })
+    try:
+        with urlopen(request, timeout=25) as response:
+            return json.loads(response.read())
+    except HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(status_code=404, detail="GitHub repository or resource was not found or is not accessible") from exc
+        if exc.code in {401, 403}:
+            raise HTTPException(status_code=502, detail="GitHub rejected the server credential or required read permissions") from exc
+        raise HTTPException(status_code=502, detail="GitHub API request failed") from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail="GitHub could not be reached") from exc
+
+
+def github_datetime(value: str | None):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
+@app.get("/api/v1/github/status")
+def github_status():
+    return {"configured": bool(settings.github_token.strip()), "authentication": "server-side token",
+        "tokenExposed": False, "syncMode": "manual pull"}
+
+
+@app.get("/api/v1/github/repositories")
+def list_available_github_repositories():
+    repositories = github_api_get("user/repos?per_page=100&sort=updated&direction=desc")
+    return [{"fullName": item["full_name"], "htmlUrl": item["html_url"],
+        "defaultBranch": item.get("default_branch") or "main", "private": item.get("private", False),
+        "updatedAt": item.get("updated_at")} for item in repositories]
+
+
+@app.get("/api/v1/projects/{project_id}/github/repositories")
+def list_project_github_data(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    repositories = db.scalars(select(GitHubRepository).where(GitHubRepository.project_id == project_id)
+        .order_by(GitHubRepository.full_name)).all()
+    records = db.scalars(select(GitHubRecord).where(GitHubRecord.project_id == project_id)
+        .order_by(GitHubRecord.updated_at.desc().nullslast()).limit(500)).all()
+    links = db.scalars(select(GitHubLink).where(GitHubLink.project_id == project_id)).all()
+    return {"repositories": [GitHubRepositoryRead.model_validate(item).model_dump(mode="json", by_alias=True) for item in repositories],
+        "records": [GitHubRecordRead.model_validate(item).model_dump(mode="json", by_alias=True) for item in records],
+        "links": [{"id": item.id, "requirementId": item.requirement_id, "recordId": item.record_id} for item in links]}
+
+
+@app.post("/api/v1/projects/{project_id}/github/repositories", status_code=status.HTTP_200_OK)
+def sync_github_repository(project_id: str, payload: GitHubRepositorySelect, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    full_name = payload.full_name.strip()
+    remote_repo = github_api_get(f"repos/{full_name}")
+    repository = db.scalar(select(GitHubRepository).where(GitHubRepository.project_id == project_id,
+        GitHubRepository.full_name == full_name))
+    if repository is None:
+        repository = GitHubRepository(id=str(uuid.uuid4()), project_id=project_id, full_name=full_name,
+            html_url=remote_repo["html_url"], default_branch=remote_repo.get("default_branch") or "main")
+        db.add(repository)
+        db.flush()
+    else:
+        repository.html_url = remote_repo["html_url"]
+        repository.default_branch = remote_repo.get("default_branch") or "main"
+    owner, name = full_name.split("/", 1)
+    data_sources = [
+        ("issue", github_api_get(f"repos/{full_name}/issues?state=all&per_page=100")),
+        ("pull_request", github_api_get(f"repos/{full_name}/pulls?state=all&per_page=100")),
+        ("commit", github_api_get(f"repos/{full_name}/commits?per_page=100")),
+        ("branch", github_api_get(f"repos/{full_name}/branches?per_page=100")),
+    ]
+    imported = 0
+    for record_type, entries in data_sources:
+        for entry in entries:
+            if record_type == "issue" and "pull_request" in entry:
+                continue
+            if record_type == "issue":
+                external_id = str(entry["number"])
+                title = entry["title"]
+                state = entry["state"]
+                url = entry["html_url"]
+                updated = github_datetime(entry.get("updated_at"))
+            elif record_type == "pull_request":
+                external_id = str(entry["number"])
+                title = entry["title"]
+                state = entry["state"]
+                url = entry["html_url"]
+                updated = github_datetime(entry.get("updated_at"))
+            elif record_type == "commit":
+                external_id = entry["sha"]
+                title = entry.get("commit", {}).get("message", "Commit").splitlines()[0][:500]
+                state = "committed"
+                url = entry["html_url"]
+                updated = github_datetime(entry.get("commit", {}).get("author", {}).get("date"))
+            else:
+                external_id = entry["name"]
+                title = entry["name"]
+                state = "branch"
+                url = f"https://github.com/{owner}/{name}/tree/{entry['name']}"
+                updated = None
+            existing = db.scalar(select(GitHubRecord).where(GitHubRecord.repository_id == repository.id,
+                GitHubRecord.record_type == record_type, GitHubRecord.external_id == external_id))
+            if existing is None:
+                db.add(GitHubRecord(id=str(uuid.uuid4()), project_id=project_id, repository_id=repository.id,
+                    record_type=record_type, external_id=external_id, title=title[:500], state=state,
+                    html_url=url, updated_at=updated))
+            else:
+                existing.title = title[:500]
+                existing.state = state
+                existing.html_url = url
+                existing.updated_at = updated
+            imported += 1
+    synced_at = datetime.now(timezone.utc)
+    repository.synced_at = synced_at
+    append_audit(db, project_id, "github_repository_synced", detail={"fullName": full_name, "recordsImported": imported})
+    append_sync_event(db, "github_repository.synced", "github_repository", repository.id,
+        {"id": repository.id, "projectId": project_id, "fullName": full_name, "syncedAt": synced_at.isoformat()})
+    db.commit()
+    db.refresh(repository)
+    return {"repository": GitHubRepositoryRead.model_validate(repository).model_dump(mode="json", by_alias=True),
+        "recordsImported": imported, "syncedAt": synced_at.isoformat()}
+
+
+@app.get("/api/v1/projects/{project_id}/github/links", response_model=list[GitHubLinkRead])
+def list_github_requirement_links(project_id: str, db: Session = Depends(get_db)):
+    query = select(GitHubLink, GitHubRecord).join(GitHubRecord, GitHubRecord.id == GitHubLink.record_id).where(GitHubLink.project_id == project_id)
+    return [{"id": link.id, "project_id": link.project_id, "requirement_id": link.requirement_id,
+        "record_id": link.record_id, "created_at": link.created_at, "record": record} for link, record in db.execute(query).all()]
+
+
+@app.post("/api/v1/requirements/{requirement_id}/github-links", response_model=GitHubLinkRead, status_code=status.HTTP_201_CREATED)
+def create_github_requirement_link(requirement_id: str, payload: GitHubLinkCreate, db: Session = Depends(get_db)):
+    requirement = db.get(Requirement, requirement_id)
+    record = db.get(GitHubRecord, payload.record_id)
+    if requirement is None or requirement.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    if record is None or record.project_id != requirement.project_id:
+        raise HTTPException(status_code=422, detail="GitHub reference must belong to this project")
+    existing = db.scalar(select(GitHubLink).where(GitHubLink.requirement_id == requirement_id, GitHubLink.record_id == record.id))
+    if existing:
+        raise HTTPException(status_code=409, detail="This GitHub reference is already linked")
+    link = GitHubLink(id=str(uuid.uuid4()), project_id=requirement.project_id,
+        requirement_id=requirement.id, record_id=record.id)
+    db.add(link)
+    append_audit(db, requirement.project_id, "github_reference_linked", requirement.id,
+        {"recordType": record.record_type, "externalId": record.external_id, "url": record.html_url})
+    append_sync_event(db, "github_link.created", "github_link", link.id,
+        {"id": link.id, "projectId": link.project_id, "requirementId": link.requirement_id, "recordId": link.record_id})
+    db.commit()
+    db.refresh(link)
+    return {"id": link.id, "project_id": link.project_id, "requirement_id": link.requirement_id,
+        "record_id": link.record_id, "created_at": link.created_at, "record": record}
 
 
 @app.get("/")

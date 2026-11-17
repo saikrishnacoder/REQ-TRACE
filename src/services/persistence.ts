@@ -208,3 +208,12 @@ export interface AssistantReplyRecord { conversation: ConversationRecord; userMe
 export const getConversations = (projectId: string) => request<ConversationRecord[]>(`/projects/${projectId}/conversations`);
 export const getConversationMessages = (id: string) => request<ConversationMessageRecord[]>(`/conversations/${id}/messages`);
 export const sendAssistantMessage = (projectId: string, message: string, conversationId?: string) => request<AssistantReplyRecord>(`/projects/${projectId}/assistant/messages`, { method: 'POST', body: JSON.stringify({ conversationId, message }) });
+export interface GitHubRecord { id: string; projectId: string; repositoryId: string; recordType: 'issue' | 'pull_request' | 'commit' | 'branch'; externalId: string; title: string; state: string; htmlUrl: string; updatedAt: string | null }
+export interface GitHubLinkRecord { id: string; projectId: string; requirementId: string; recordId: string; createdAt: string; record: GitHubRecord }
+export interface GitHubRepositoryRecord { id: string; projectId: string; fullName: string; htmlUrl: string; defaultBranch: string; syncedAt: string | null }
+export const getGitHubStatus = () => request<{ configured: boolean; authentication: string; tokenExposed: boolean; syncMode: string }>('/github/status');
+export const getAvailableGitHubRepositories = () => request<{ fullName: string; htmlUrl: string; defaultBranch: string; private: boolean; updatedAt: string }[]>('/github/repositories');
+export const getProjectGitHubData = (projectId: string) => request<{ repositories: GitHubRepositoryRecord[]; records: GitHubRecord[]; links: { id: string; requirementId: string; recordId: string }[] }>(`/projects/${projectId}/github/repositories`);
+export const syncGitHubRepository = (projectId: string, fullName: string) => request<{ repository: GitHubRepositoryRecord; recordsImported: number; syncedAt: string }>(`/projects/${projectId}/github/repositories`, { method: 'POST', body: JSON.stringify({ fullName }) });
+export const createGitHubRequirementLink = (requirementId: string, recordId: string) => request<GitHubLinkRecord>(`/requirements/${requirementId}/github-links`, { method: 'POST', body: JSON.stringify({ recordId }) });
+export const getGitHubRequirementLinks = (projectId: string) => request<GitHubLinkRecord[]>(`/projects/${projectId}/github/links`);

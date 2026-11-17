@@ -33,7 +33,7 @@ The previous implementation plan correctly limits the current release to local p
 | Local cache/synchronization | localStorage recovery data plus queued POST/PATCH writes; 15-second online retry | A permanently invalid first outbox item blocks later writes because flush stops at the first error. There are no deletes/conflict-resolution policies or server-side sync API. This is single-user/local-first, not team synchronization. | P1 |
 | Oracle | `oracle+oracledb`, environment-based settings, setup SQL and explicit schema initializer | No schema migrations or authenticated team API yet. The setup SQL contains a password placeholder by design; secrets must remain in ignored `.env`/environment variables. | P1 for team use |
 | AI | No model/provider client or server endpoints | Requirement analysis, generation, grounded assistant, structured validation, fallback, history, and key management are absent. Current conversation intake explicitly captures text without AI. | P1 |
-| GitHub | No GitHub client, OAuth flow, token store, webhook, or repository/reference models | The integration requested in the broader project history is not present in this checked-out code. | P1 |
+| GitHub | Server-side read-only token integration; manual repo sync for issues, PRs, commits, branches; persisted requirement links | No OAuth flow, webhook, write actions, or external credential verification. Sync imports first 100 records per category. | P1 |
 | Traceability/testing/defects | No corresponding backend models, APIs, or screens | Matrix, coverage, execution, test generation, and defect tracking cannot be used. | P1 |
 | Reports/automation | No report or automation implementation | No scheduled jobs, execution history, exports, or rule controls. | P2 |
 | Security/privacy | Secrets are excluded by `.gitignore`; local sidecar defaults to loopback; React escapes rendered values | No authentication/RBAC/CSRF/rate limiting or file-upload validation exists. SQLite and browser cache are not encrypted. Do not host the current API publicly or accept untrusted document uploads. | P0 for shared deployment |
@@ -56,6 +56,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
 | `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
 | `/assistant` | Saved project conversations, retrieved-record answers, and source links | Implemented with local-search fallback; live provider path needs server-side key; streaming and regenerate remain open |
+| `/github` | Server-configured repository import and requirement links to issues, PRs, commits, branches | Implemented for manual read-only sync; requires `GITHUB_TOKEN`; OAuth and webhook sync remain open |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
 
 ## No UI-only features to misrepresent
@@ -131,3 +132,15 @@ with each answer. Without a configured provider, it uses local term matching and
 states that limitation. Conversation access is project-scoped. Fallback,
 history, source references, and cross-project rejection pass backend tests.
 External provider calls and streaming are not verified/implemented.
+
+## GitHub integration progress
+
+Alembic revision `20261117_0008` adds repository, imported-record, and
+requirement-link tables. The `/github` route reports credential configuration,
+lists repositories visible to a server-side fine-grained token, imports the
+first 100 issues, pull requests, commits, and branches per category, and lets
+users link imported records to requirements. Credentials never leave FastAPI.
+The API tests use a mocked GitHub provider and verify token non-disclosure,
+record persistence, and requirement linking. A live GitHub call has not been
+verified because no token was configured. OAuth, webhooks, pagination beyond
+100 per endpoint, and automatic background sync remain outstanding.

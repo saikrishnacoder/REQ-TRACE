@@ -104,3 +104,15 @@ local-search response otherwise. Cross-project conversation access is
 rejected. Streaming, regenerate, and richer semantic retrieval remain future
 work. TypeScript and all 14 backend tests pass; the refreshed installer and
 packaged-sidecar smoke test pass (28.85 MiB installer).
+
+## GitHub read-only integration slice (2026-11-17)
+
+Revision `20261117_0008` stores connected repositories, imported GitHub records,
+and links from requirements. The `/github` page syncs repository metadata,
+issues, pull requests, commits, and branches through a server-side token and
+offers requirement linking. It uses manual pull only; no token is sent to the
+frontend. A mocked provider test checks import/link and non-disclosure. Configure
+a least-privilege `GITHUB_TOKEN` in the ignored backend `.env` to use it. No
+live account token is present here; OAuth, webhooks, pagination, and background
+sync remain future work. TypeScript and all 15 backend tests pass; the
+refreshed installer and packaged-sidecar smoke test pass (28.86 MiB installer).

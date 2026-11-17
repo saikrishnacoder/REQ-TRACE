@@ -69,3 +69,14 @@ and is never returned to the web client. When the key is absent or the provider
 is unavailable, the API saves a clearly labeled heuristic result instead.
 Analysis history is stored in the configured database by Alembic revision
 `20261117_0005`.
+
+## GitHub read-only sync
+
+Set `GITHUB_TOKEN` to a fine-grained token with repository metadata, contents,
+issues, and pull request read access. Optionally set `GITHUB_API_URL` for a
+GitHub Enterprise API base. Keep the token in the ignored backend `.env` or
+deployment secret store. The `/github` API never returns it and performs manual
+read-only imports (first 100 records per endpoint) of repository metadata,
+issues, pull requests, commits, and branches. Alembic revision `20261117_0008`
+stores those records and requirement links. OAuth and webhook subscriptions are
+not implemented.

@@ -271,3 +271,45 @@ def test_assistant_rejects_conversation_from_another_project(client: TestClient,
         "conversationId": conversation["id"], "message": "cross project access",
     })
     assert response.status_code == 404
+
+
+def test_github_read_only_sync_imports_records_without_exposing_token(client: TestClient, monkeypatch) -> None:
+    from app.config import settings
+    import app.main as main
+
+    monkeypatch.setattr(settings, "github_token", "server-secret")
+
+    def fake_github_get(path: str):
+        if path == "repos/acme/store":
+            return {"full_name": "acme/store", "html_url": "https://github.com/acme/store", "default_branch": "main"}
+        if path.endswith("/issues?state=all&per_page=100"):
+            return [{"number": 17, "title": "Checkout timeout", "state": "open", "html_url": "https://github.com/acme/store/issues/17", "updated_at": "2026-11-17T10:00:00Z"}]
+        if path.endswith("/pulls?state=all&per_page=100"):
+            return [{"number": 18, "title": "Handle timeout", "state": "open", "html_url": "https://github.com/acme/store/pull/18", "updated_at": "2026-11-17T11:00:00Z"}]
+        if path.endswith("/commits?per_page=100"):
+            return []
+        if path.endswith("/branches?per_page=100"):
+            return [{"name": "main"}]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(main, "github_api_get", fake_github_get)
+    project = client.post("/api/v1/projects", json={"name": "Store", "key": "STORE"}).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Checkout", "statement": "Checkout completes.", "type": "Functional", "priority": "High",
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Checkout completes.",
+    }).json()
+    status_response = client.get("/api/v1/github/status").json()
+    assert status_response["configured"] is True
+    assert status_response["tokenExposed"] is False
+    assert "server-secret" not in str(status_response)
+
+    synced = client.post(f"/api/v1/projects/{project['id']}/github/repositories", json={"fullName": "acme/store"})
+    assert synced.status_code == 200
+    assert synced.json()["recordsImported"] == 3
+    records = client.get(f"/api/v1/projects/{project['id']}/github/repositories").json()["records"]
+    issue = next(item for item in records if item["recordType"] == "issue")
+    assert next(item for item in records if item["recordType"] == "pull_request")
+    linked = client.post(f"/api/v1/requirements/{requirement['id']}/github-links", json={"recordId": issue["id"]})
+    assert linked.status_code == 201
+    assert linked.json()["record"]["externalId"] == "17"
+    assert any(item["action"] == "github_reference_linked" for item in client.get(f"/api/v1/projects/{project['id']}/audit").json())
