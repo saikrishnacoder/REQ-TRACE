@@ -247,7 +247,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/projects' ? 'Projects' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -273,6 +273,7 @@ function Workspace(props: WorkspaceProps) {
         <div className="sidebar-caption nav-caption">PROJECT</div>
         <nav className="side-nav">
           <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
+          <NavLink to="/projects" aria-label="Projects" title="Projects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><FolderKanban size={17} /><span>Projects</span></NavLink>
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
           <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
           <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
@@ -305,6 +306,7 @@ function Workspace(props: WorkspaceProps) {
         <div className="page-content">
           <Routes>
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} projectCount={props.projects.length} />} />
+            <Route path="/projects" element={<ProjectsPage projects={props.projects} currentProject={props.project} onSelect={(id) => { props.onSelectProject(id); navigate('/'); }} onCreate={() => navigate('/new-project')} />} />
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} createRequirement={props.createRequirement} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
@@ -482,6 +484,10 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
   </div>;
 }
 
+function ProjectsPage({ projects, currentProject, onSelect, onCreate }: { projects: Project[]; currentProject: Project; onSelect: (id: string) => void; onCreate: () => void }) {
+  return <div className="narrow-page"><div className="eyebrow"><FolderKanban size={13} /> WORKSPACES</div><div className="welcome-row"><div><h1 className="page-heading">Projects</h1><p className="page-subheading">Switch between project workspaces stored in this local profile.</p></div><button className="button button-primary" onClick={onCreate}><Plus size={15} /> New project</button></div><div className="projects-grid">{projects.map((project) => <button className={`surface project-card${project.id === currentProject.id ? ' active' : ''}`} key={project.id} onClick={() => onSelect(project.id)}><span className="project-avatar">{project.key.slice(0, 2)}</span><span className="project-card-main"><b>{project.name}</b><small>{project.key} · created {dateLabel(project.createdAt)}</small><span>{project.description || 'No project description'}</span></span>{project.id === currentProject.id && <span className="phase-pill">Current</span>}</button>)}</div></div>;
+}
+
 function parseCsv(text: string): string[][] {
   const rows: string[][] = []; let row: string[] = []; let cell = ''; let quoted = false;
   for (let i = 0; i < text.length; i += 1) {
@@ -508,6 +514,8 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement, 
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkPriority, setBulkPriority] = useState<Priority>('Medium');
   const [importSummary, setImportSummary] = useState('');
   const visible = useMemo(() => {
     const priorityOrder: Record<Priority, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -566,22 +574,33 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement, 
       setImportSummary(`Imported ${imported} requirement${imported === 1 ? '' : 's'}${skipped.length ? `; skipped invalid row${skipped.length === 1 ? '' : 's'}: ${skipped.join(', ')}` : ''}.`);
     } catch { setImportSummary('Could not read this CSV. Save it as UTF-8 CSV and try again.'); }
   };
+  const applyBulkPriority = () => {
+    const editable = requirements.filter((item) => selectedIds.has(item.id) && item.status !== 'Approved' && item.status !== 'Rejected');
+    if (!editable.length || !window.confirm(`Set priority to ${bulkPriority} for ${editable.length} editable requirement${editable.length === 1 ? '' : 's'}?`)) return;
+    editable.forEach((item) => updateRequirement(item.id, { priority: bulkPriority }));
+    setImportSummary(`Updated priority for ${editable.length} requirement${editable.length === 1 ? '' : 's'}.`);
+    setSelectedIds(new Set());
+  };
   return <>
     <div className="welcome-row"><div><div className="eyebrow">PROJECT RECORDS</div><h1 className="page-heading">Requirements</h1><p className="page-subheading">Review source-backed drafts before they enter the approved baseline.</p></div><div className="requirements-actions"><label className="button button-secondary"><Upload size={15} />Import CSV<input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importCsv(file); event.currentTarget.value = ''; }} /></label><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div></div>
     {importSummary && <div className="sync-alert" role="status">{importSummary}</div>}
     <section className="surface records-surface">
       <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'Rejected'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => { setFilter(status); setPage(1); }}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search records" /></label><select aria-label="Filter by priority" value={priority} onChange={(event) => { setPriority(event.target.value as 'All' | Priority); setPage(1); }}><option value="All">All priorities</option>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort requirements" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Priority</option></select><button className="button button-secondary button-small" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div></div>
-      {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
+      {selectedIds.size > 0 && <div className="bulk-toolbar"><span>{selectedIds.size} selected · approved/rejected records are read-only</span><select aria-label="Set selected requirement priority" value={bulkPriority} onChange={(e) => setBulkPriority(e.target.value as Priority)}>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><button className="button button-secondary button-small" onClick={applyBulkPriority}>Update priority</button><button className="text-button" onClick={() => setSelectedIds(new Set())}>Clear</button></div>}
+      {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} selectedIds={selectedIds} onToggleSelection={(id, checked) => setSelectedIds((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; })} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
     </section>
     {selected && <RequirementEditor requirement={selected} onClose={() => setSelectedId(null)} onSave={(updates) => updateRequirement(selected.id, updates)} onDelete={() => { deleteRequirement(selected.id); setSelectedId(null); }} />}
   </>;
 }
 
-function RequirementRows({ requirements, onSelect, compact = false }: { requirements: Requirement[]; onSelect?: (id: string) => void; compact?: boolean }) {
-  return <div className="requirement-list">{requirements.map((item) => <button className={`requirement-row${compact ? ' compact' : ''}`} key={item.id} onClick={() => onSelect?.(item.id)} disabled={!onSelect}>
-    <div className="requirement-row-main"><span className="requirement-id">{item.code}</span><b>{item.title}</b><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></div>
-    <p>{item.statement}</p><div className="requirement-meta"><span className="source-chip">{item.sourceType}</span><span>{item.sourceReference}</span><span className="meta-separator">·</span><span>{dateLabel(item.createdAt)}</span><span className="spacer" /><span className="type-label">{item.type}</span><span className={`priority-label priority-${item.priority.toLowerCase()}`}>{item.priority}</span>{onSelect && <ArrowUpRight size={15} />}</div>
-  </button>)}</div>;
+function RequirementRows({ requirements, onSelect, compact = false, selectedIds, onToggleSelection }: { requirements: Requirement[]; onSelect?: (id: string) => void; compact?: boolean; selectedIds?: Set<string>; onToggleSelection?: (id: string, checked: boolean) => void }) {
+  return <div className="requirement-list">{requirements.map((item) => {
+    const row = <button className={`requirement-row${compact ? ' compact' : ''}`} key={item.id} onClick={() => onSelect?.(item.id)} disabled={!onSelect}>
+      <div className="requirement-row-main"><span className="requirement-id">{item.code}</span><b>{item.title}</b><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></div>
+      <p>{item.statement}</p><div className="requirement-meta"><span className="source-chip">{item.sourceType}</span><span>{item.sourceReference}</span><span className="meta-separator">·</span><span>{dateLabel(item.createdAt)}</span><span className="spacer" /><span className="type-label">{item.type}</span><span className={`priority-label priority-${item.priority.toLowerCase()}`}>{item.priority}</span>{onSelect && <ArrowUpRight size={15} />}</div>
+    </button>;
+    return onToggleSelection ? <div className="requirement-select-row" key={item.id}><input type="checkbox" aria-label={`Select ${item.code}`} checked={selectedIds?.has(item.id) ?? false} disabled={item.status === 'Approved' || item.status === 'Rejected'} onChange={(event) => onToggleSelection(item.id, event.target.checked)} />{row}</div> : row;
+  })}</div>;
 }
 
 function RequirementEditor({ requirement, onClose, onSave, onDelete }: { requirement: Requirement; onClose: () => void; onSave: (updates: Partial<Requirement>) => void; onDelete: () => void }) {

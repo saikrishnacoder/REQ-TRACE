@@ -150,4 +150,9 @@ installer passed the packaged-sidecar migration/health smoke test.
 The requirement list now imports validated UTF-8 CSV rows through the existing
 persisted create path, reports invalid row numbers, and exports with formula
 neutralization. Type and priority values are checked before creating records.
-Excel import and bulk edit remain planned.
+Excel import and bulk field editing beyond priority remain planned.
+
+The `/projects` route lists project workspaces and switches the active project.
+The requirements list supports confirmed bulk priority changes on selected
+editable records. Approved and rejected baseline records are excluded from
+selection. TypeScript, Vite, the installer build, and all 16 backend tests pass.

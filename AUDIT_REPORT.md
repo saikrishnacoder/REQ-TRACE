@@ -47,6 +47,7 @@ The previous implementation plan correctly limits the current release to local p
 | Path | Current behavior | Status |
 |---|---|---|
 | `/` | Project overview with counts/workflow/recent requirements | Implemented |
+| `/projects` | Switch between saved workspaces and create projects | Implemented |
 | `/requirements` | Search/filter/list and review drawer | Partial |
 | `/intake` | Manual/conversation text capture; document metadata + manually entered text | Partial; no parser/upload/AI |
 | `/project` | Read-only active project details | Partial |

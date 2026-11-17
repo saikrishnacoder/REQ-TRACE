@@ -562,6 +562,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .requirements-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .requirements-actions input[type="file"] { display: none; }
 .requirements-actions label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.project-card { display: flex; width: 100%; align-items: center; gap: 14px; padding: 16px; color: #e8ebf3; text-align: left; cursor: pointer; }
+.project-card.active { border-color: #654fc0; box-shadow: 0 0 0 1px #654fc044; }
+.project-card-main { display: grid; flex: 1; gap: 5px; }
+.project-card-main b { font-size: 14px; }
+.project-card-main small, .project-card-main > span { color: #98a3ba; font-size: 11px; }
+.projects-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+.requirement-select-row { display: flex; align-items: stretch; gap: 10px; padding-left: 16px; border-bottom: 1px solid #252e40; }
+.requirement-select-row > input { width: 15px; flex: none; align-self: center; accent-color: #8b5cf6; }
+.requirement-select-row .requirement-row { flex: 1; border-bottom: 0; }
+.bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 10px 16px; border-top: 1px solid #2d3549; background: #111722; }
+.bulk-toolbar > span { margin-right: auto; color: #a6afc2; font-size: 11px; }
 .report-toolbar label { min-width: min(380px, 100%); }
 .report-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-preview { margin-top: 16px; overflow: hidden; }
@@ -603,6 +614,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .history-error { display: block; color: #f29a9a; padding: 8px 0; }
 @media (max-width: 640px) { .report-toolbar { align-items: stretch; flex-direction: column; } .report-toolbar label { min-width: 0; } }
 @media (max-width: 640px) { .automation-rule { align-items: flex-start; flex-direction: column; } .automation-actions { width: 100%; justify-content: space-between; } }
+@media (max-width: 680px) { .projects-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .github-connect-row { align-items: stretch; flex-direction: column; } .github-connect-row button { align-self: flex-start; } }
 @media (max-width: 850px) { .assistant-layout { grid-template-columns: 1fr; } .assistant-thread { min-height: 420px; } }
 @media (max-width: 850px) { .ai-layout { grid-template-columns: 1fr; } .ai-score-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ai-overall { grid-column: 1 / -1; } }
