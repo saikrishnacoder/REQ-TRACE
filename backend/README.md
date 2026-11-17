@@ -61,3 +61,11 @@ client also keeps a browser cache and retry outbox, so the workspace remains
 usable if its local Python process restarts. Oracle is reserved for the
 server-side team database; the sync API and authentication are not implemented
 yet, so keep all current services on loopback.
+# Optional AI requirement analysis
+
+Set `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` in the server environment to
+enable OpenAI-compatible structured analysis. The key is only read by FastAPI
+and is never returned to the web client. When the key is absent or the provider
+is unavailable, the API saves a clearly labeled heuristic result instead.
+Analysis history is stored in the configured database by Alembic revision
+`20261117_0005`.

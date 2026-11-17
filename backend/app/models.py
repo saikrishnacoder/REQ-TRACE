@@ -144,3 +144,15 @@ class Defect(Base):
     severity: Mapped[str] = mapped_column("SEVERITY", String(20), nullable=False, default="Medium")
     status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False, default="Open")
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class RequirementAnalysis(Base):
+    __tablename__ = "RT_REQUIREMENT_ANALYSES"
+    __table_args__ = (Index("IX_RT_ANALYSIS_REQUIREMENT", "REQUIREMENT_ID", "CREATED_AT"),)
+
+    id: Mapped[str] = mapped_column("ANALYSIS_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    result_json: Mapped[str] = mapped_column("RESULT_JSON", Text, nullable=False)
+    provider: Mapped[str] = mapped_column("PROVIDER", String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

@@ -190,3 +190,30 @@ class DefectRead(APIModel):
     severity: str
     status: str
     created_at: datetime
+
+
+class AnalysisIssue(APIModel):
+    category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
+    explanation: str = Field(min_length=1, max_length=1000)
+    evidence: str = Field(default="", max_length=1000)
+
+
+class RequirementAnalysisResult(APIModel):
+    quality_score: int = Field(ge=0, le=100)
+    clarity_score: int = Field(ge=0, le=100)
+    completeness_score: int = Field(ge=0, le=100)
+    testability_score: int = Field(ge=0, le=100)
+    ambiguity_score: int = Field(ge=0, le=100)
+    issues: list[AnalysisIssue] = Field(default_factory=list, max_length=20)
+    suggested_improvements: list[str] = Field(default_factory=list, max_length=12)
+    recommended_acceptance_criteria: list[str] = Field(default_factory=list, max_length=12)
+    is_ai_generated: bool = True
+
+
+class RequirementAnalysisRead(APIModel):
+    id: str
+    project_id: str
+    requirement_id: str
+    result: RequirementAnalysisResult
+    provider: str
+    created_at: datetime

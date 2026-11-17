@@ -38,7 +38,7 @@ def test_upgrade_preserves_data_from_create_all_schema(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert connection.execute(text("SELECT NAME FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "Legacy"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261117_0004"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261117_0005"
     engine.dispose()
 
 

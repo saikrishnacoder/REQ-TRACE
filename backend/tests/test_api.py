@@ -211,3 +211,24 @@ def test_test_case_rejects_cross_project_requirement(client: TestClient) -> None
         "requirementId": requirement["id"], "title": "Cross scope", "steps": ["Check"], "expectedResult": "Pass",
     })
     assert response.status_code == 422
+
+
+def test_requirement_analysis_uses_labeled_local_fallback_and_persists_history(client: TestClient, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_api_key", "")
+    project = client.post("/api/v1/projects", json={"name": "Analysis", "key": "ANL"}).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Fast dashboard", "statement": "The system loads a fast and easy dashboard.", "type": "Functional",
+        "priority": "Medium", "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Fast dashboard",
+    }).json()
+    response = client.post(f"/api/v1/requirements/{requirement['id']}/analyses")
+    assert response.status_code == 201
+    result = response.json()
+    assert result["provider"] == "heuristic-fallback"
+    assert result["result"]["isAiGenerated"] is False
+    assert result["result"]["qualityScore"] <= 100
+    assert result["result"]["issues"]
+    history = client.get(f"/api/v1/requirements/{requirement['id']}/analyses")
+    assert history.status_code == 200
+    assert len(history.json()) == 1

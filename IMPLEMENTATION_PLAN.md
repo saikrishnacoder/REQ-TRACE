@@ -65,3 +65,15 @@ The `/tests` and `/defects` routes provide create/list/status workflows.
 Automated execution, run evidence, richer defect editing, and full traceability
 visualization remain outstanding. The new slice passes the API and migration
 tests and TypeScript check; a fresh sidecar/installer build is still required.
+
+## AI requirement intelligence slice (2026-11-17)
+
+Revision `20261117_0005` stores validated analysis history. `/ai` is a working
+requirement-by-requirement review workflow with provider labels, local
+heuristic fallback, and user acceptance of suggested criteria. OpenAI-
+compatible provider configuration is server-only (`AI_API_KEY`, `AI_BASE_URL`,
+`AI_MODEL`) and must be placed in the ignored backend `.env` or deployment
+environment. No key is included in the frontend or source control. External
+provider behavior remains unverified without credentials. AI test generation,
+grounded assistant conversations, streamed responses, and acceptance/rejection
+of all suggestion types are still planned.

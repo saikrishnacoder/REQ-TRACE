@@ -5,11 +5,11 @@ import {
   ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Inbox, Layers3,
   ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
-  Trash2, Upload, X
+  Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { createDefect, createTestCase, getDefects, getTestCases, getTraceability, updateDefect } from './services/persistence';
-import type { DefectRecord, TestCaseRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createTestCase, getDefects, getRequirementAnalyses, getTestCases, getTraceability, updateDefect } from './services/persistence';
+import type { DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -269,6 +269,7 @@ function Workspace(props: WorkspaceProps) {
         <nav className="side-nav">
           <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
+          <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
@@ -296,6 +297,7 @@ function Workspace(props: WorkspaceProps) {
           <Routes>
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} />} />
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
+            <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
@@ -624,6 +626,23 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
         })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{snapshot ? orphanIds.has(item.id) ? <span className="trace-state orphan">Unlinked</span> : <span className="trace-state linked">Linked</span> : <span className="trace-state unknown">Unavailable</span>}</td></tr>;
       })}</tbody></table></div>}
     </section>
+  </div>;
+}
+
+function AIIntelligencePage({ project, requirements, updateRequirement }: { project: Project; requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement'] }) {
+  const [selected, setSelected] = useState<Requirement | null>(null);
+  const [history, setHistory] = useState<RequirementAnalysisRecord[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const refresh = async (requirement: Requirement) => { setSelected(requirement); try { setHistory(await getRequirementAnalyses(requirement.id)); setError(''); } catch { setHistory([]); setError('Analysis history is unavailable while the local API is offline.'); } };
+  const analyze = async (requirement: Requirement) => { setBusy(true); setError(''); try { const result = await analyzeRequirement(requirement.id); setSelected(requirement); setHistory((items) => [result, ...items]); } catch (e) { setError(e instanceof Error ? e.message : 'Analysis could not be saved.'); } finally { setBusy(false); } };
+  const latest = history[0];
+  const addCriterion = (criterion: string) => { if (!selected || selected.status === 'Approved' || selected.status === 'Rejected') return; if (selected.acceptanceCriteria.includes(criterion)) return; const acceptanceCriteria = [...selected.acceptanceCriteria, criterion]; updateRequirement(selected.id, { acceptanceCriteria }); setSelected({ ...selected, acceptanceCriteria }); };
+  return <div className="ai-page"><div className="eyebrow"><Sparkles size={13} /> REQUIREMENT INTELLIGENCE · {project.key}</div><h1 className="page-heading">AI intelligence</h1><p className="page-subheading">Review clarity, completeness, testability, ambiguity, and suggested acceptance criteria. Every result is advisory and saved with its source.</p>
+    <div className="ai-disclosure"><ShieldCheck size={16} /><span><b>Private by default.</b> Without a server-side AI key, ReqTrace uses a local heuristic and labels it clearly. Configure an OpenAI-compatible provider in backend environment settings to enable AI analysis. Provider keys never go to the browser.</span></div>
+    {error && <div className="sync-alert" role="status">{error}</div>}
+    <div className="ai-layout"><section className="surface ai-requirement-list"><div className="section-heading"><div><span className="eyebrow">PROJECT REQUIREMENTS</span><h2>Select a requirement</h2></div></div>{requirements.length === 0 ? <EmptyState icon={<FileText size={18} />} title="Nothing to analyze" text="Add requirements to this project first." /> : requirements.map((r) => <button className={`ai-requirement-row${selected?.id === r.id ? ' active' : ''}`} key={r.id} onClick={() => void refresh(r)}><span className="requirement-id">{r.code}</span><b>{r.title}</b><small>{r.priority} · {r.status}</small></button>)}</section>
+      <section className="surface ai-result-panel">{!selected ? <EmptyState icon={<Sparkles size={18} />} title="Choose a requirement" text="Select a requirement to review its latest analysis or create a new one." /> : <><div className="section-heading"><div><span className="eyebrow">ANALYSIS HISTORY · {selected.code}</span><h2>{selected.title}</h2></div><button className="button button-primary" disabled={busy} onClick={() => void analyze(selected)}><Sparkles size={15} />{busy ? 'Analyzing…' : 'Analyze'}</button></div>{!latest ? <EmptyState icon={<Search size={18} />} title="No saved analysis" text="Run an analysis to get a reviewable, persisted assessment." /> : <div className="ai-analysis"><div className="ai-score-row"><div className="ai-overall"><strong>{latest.result.qualityScore}</strong><span>quality score</span></div>{[['Clarity', latest.result.clarityScore], ['Completeness', latest.result.completenessScore], ['Testability', latest.result.testabilityScore], ['Ambiguity', latest.result.ambiguityScore]].map(([label, score]) => <div className="ai-score" key={label}><b>{score}{label === 'Ambiguity' ? ' risk' : ''}</b><span>{label}</span></div>)}</div><div className={`ai-provider-note ${latest.result.isAiGenerated ? 'ai-generated' : ''}`}>{latest.result.isAiGenerated ? `AI recommendation · ${latest.provider}` : 'Local heuristic fallback · not an AI assessment'}</div><h3>Potential issues</h3>{latest.result.issues.length ? latest.result.issues.map((issue, i) => <div className="ai-issue" key={i}><b>{issue.category}</b><p>{issue.explanation}</p>{issue.evidence && <small>Evidence: “{issue.evidence}”</small>}</div>) : <p>No potential issues were reported.</p>}<h3>Suggested improvements</h3><ul>{latest.result.suggestedImprovements.map((x, i) => <li key={i}>{x}</li>)}</ul><h3>Recommended acceptance criteria</h3><ul>{latest.result.recommendedAcceptanceCriteria.map((x, i) => <li className="ai-criterion" key={i}><span>{x}</span>{selected.status === 'Approved' || selected.status === 'Rejected' ? <small>Read-only baseline</small> : <button disabled={selected.acceptanceCriteria.includes(x)} onClick={() => addCriterion(x)}>{selected.acceptanceCriteria.includes(x) ? 'Added' : 'Add to requirement'}</button>}</li>)}</ul><small className="ai-timestamp">Saved {dateLabel(latest.createdAt)} · {history.length} analysis record{history.length === 1 ? '' : 's'}</small>{history.length > 1 && <div className="ai-history-list"><h3>Previous analyses</h3>{history.slice(1).map((a) => <button key={a.id} onClick={() => setHistory((items) => [a, ...items.filter((x) => x.id !== a.id)])}>{dateLabel(a.createdAt)} · score {a.result.qualityScore} · {a.provider}</button>)}</div>}</div>}</>}</section></div>
   </div>;
 }
 

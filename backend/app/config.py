@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     oracle_config_dir: str | None = None
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    ai_api_key: str = Field(default="", repr=False)
+    ai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-4o-mini"
 
     @property
     def resolved_database_url(self) -> str | URL:

@@ -54,6 +54,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/traceability` | Persisted requirement-to-requirement link matrix and orphan list | Implemented; does not yet link tests, defects, code, or source artifacts |
 | `/tests` | Create and list persisted manual test cases with requirement references | Implemented; execution and run evidence are not yet available |
 | `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
+| `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
 
 ## No UI-only features to misrepresent
@@ -105,5 +106,16 @@ Alembic revision `20261117_0004` adds persisted test cases and defects. The API
 validates requirement/test references against the active project, assigns
 readable IDs, records audit and outbox events, and supports defect status
 changes. The `/tests` and `/defects` screens create and list those records.
-Automated runs, execution evidence, broader multi-entity trace views, and a
-refreshed installer smoke run are being completed for this slice.
+Automated runs, execution evidence, and broader multi-entity trace views remain
+open. The refreshed installer and packaged-sidecar smoke check passed.
+
+## AI requirement intelligence progress
+
+Alembic revision `20261117_0005` persists validated analysis results and
+provider labels. The `/ai` route analyzes a selected requirement, shows saved
+history, distinguishes AI provider output from the local heuristic fallback,
+and lets the user add recommended acceptance criteria to editable requirements.
+Provider configuration is server-side (`AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`)
+and never returned to the client. Fallback persistence and output validation
+are covered by the backend suite; an external provider request has not been
+verified because no provider credential was supplied in this workspace.
