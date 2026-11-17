@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models import AuditEvent, Defect, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase
-from app.schemas import AuditEventRead, DefectCreate, DefectRead, DefectUpdate, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TraceabilityRead
+from app.models import AuditEvent, Defect, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
+from app.schemas import AuditEventRead, DefectCreate, DefectRead, DefectUpdate, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -350,6 +350,30 @@ def list_test_cases(project_id: str, db: Session = Depends(get_db)):
     if db.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return list(db.scalars(select(TestCase).where(TestCase.project_id == project_id).order_by(TestCase.created_at.desc())).all())
+
+
+@app.get("/api/v1/projects/{project_id}/test-executions", response_model=list[TestExecutionRead])
+def list_test_executions(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list(db.scalars(select(TestExecution).where(TestExecution.project_id == project_id).order_by(TestExecution.executed_at.desc())).all())
+
+
+@app.post("/api/v1/test-cases/{test_case_id}/executions", response_model=TestExecutionRead, status_code=status.HTTP_201_CREATED)
+def create_test_execution(test_case_id: str, payload: TestExecutionCreate, db: Session = Depends(get_db)):
+    test_case = db.get(TestCase, test_case_id)
+    if test_case is None:
+        raise HTTPException(status_code=404, detail="Test case not found")
+    execution = TestExecution(id=str(uuid.uuid4()), project_id=test_case.project_id, test_case_id=test_case.id,
+        status=payload.status, actual_result=payload.actual_result.strip(), executed_at=datetime.now(timezone.utc))
+    db.add(execution)
+    append_audit(db, test_case.project_id, "test_execution_recorded", test_case.requirement_id,
+        {"testCaseCode": test_case.code, "executionId": execution.id, "status": execution.status})
+    append_sync_event(db, "test_execution.created", "test_execution", execution.id,
+        TestExecutionRead.model_validate(execution).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(execution)
+    return execution
 
 
 @app.post("/api/v1/projects/{project_id}/test-cases", response_model=TestCaseRead, status_code=status.HTTP_201_CREATED)

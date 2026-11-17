@@ -197,3 +197,6 @@ export const updateDefect = (id: string, status: string) => request<DefectRecord
 export interface RequirementAnalysisRecord { id: string; requirementId: string; provider: string; createdAt: string; result: { qualityScore: number; clarityScore: number; completenessScore: number; testabilityScore: number; ambiguityScore: number; issues: { category: string; explanation: string; evidence: string }[]; suggestedImprovements: string[]; recommendedAcceptanceCriteria: string[]; isAiGenerated: boolean } }
 export const analyzeRequirement = (id: string) => request<RequirementAnalysisRecord>(`/requirements/${id}/analyses`, { method: 'POST' });
 export const getRequirementAnalyses = (id: string) => request<RequirementAnalysisRecord[]>(`/requirements/${id}/analyses`);
+export interface TestExecutionRecord { id: string; projectId: string; testCaseId: string; status: 'Passed' | 'Failed' | 'Blocked' | 'Skipped'; actualResult: string; executedAt: string }
+export const getTestExecutions = (projectId: string) => request<TestExecutionRecord[]>(`/projects/${projectId}/test-executions`);
+export const createTestExecution = (testCaseId: string, status: TestExecutionRecord['status'], actualResult: string) => request<TestExecutionRecord>(`/test-cases/${testCaseId}/executions`, { method: 'POST', body: JSON.stringify({ status, actualResult }) });

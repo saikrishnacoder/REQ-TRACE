@@ -156,3 +156,15 @@ class RequirementAnalysis(Base):
     result_json: Mapped[str] = mapped_column("RESULT_JSON", Text, nullable=False)
     provider: Mapped[str] = mapped_column("PROVIDER", String(40), nullable=False)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class TestExecution(Base):
+    __tablename__ = "RT_TEST_EXECUTIONS"
+    __table_args__ = (Index("IX_RT_EXEC_CASE_TIME", "TEST_CASE_ID", "EXECUTED_AT"),)
+
+    id: Mapped[str] = mapped_column("EXECUTION_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    test_case_id: Mapped[str] = mapped_column("TEST_CASE_ID", String(36), ForeignKey("RT_TEST_CASES.TEST_CASE_ID", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False)
+    actual_result: Mapped[str] = mapped_column("ACTUAL_RESULT", Text, nullable=False)
+    executed_at: Mapped[datetime] = mapped_column("EXECUTED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

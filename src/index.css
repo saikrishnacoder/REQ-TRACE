@@ -485,6 +485,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .test-case-card p { color: var(--muted, #a2abc0); line-height: 1.55; }
 .test-case-card ol { color: var(--muted, #a2abc0); padding-left: 22px; line-height: 1.65; }
 .test-case-card .settings-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.test-run-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 12px; }
+.test-run-actions span { margin-right: auto; color: #9aa5bc; font-size: 12px; }
+.test-history { margin-top: 12px; color: #aab3c6; font-size: 12px; }
+.test-history summary { cursor: pointer; }
+.test-history p { border-left: 2px solid #384258; padding-left: 10px; }
 .ai-disclosure { display: flex; gap: 12px; align-items: flex-start; margin: 18px 0; padding: 14px 16px; border: 1px solid #493d70; border-radius: 10px; background: #1c1930; color: #c8c1e2; line-height: 1.55; font-size: 13px; }
 .ai-disclosure svg { flex: none; color: #a78bfa; margin-top: 2px; }
 .ai-layout { display: grid; grid-template-columns: minmax(240px, .75fr) minmax(0, 1.5fr); align-items: start; gap: 18px; }

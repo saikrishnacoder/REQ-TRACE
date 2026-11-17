@@ -52,7 +52,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/project` | Read-only active project details | Partial |
 | `/new-project` | Create a project | Implemented |
 | `/traceability` | Persisted requirement-to-requirement link matrix and orphan list | Implemented; does not yet link tests, defects, code, or source artifacts |
-| `/tests` | Create and list persisted manual test cases with requirement references | Implemented; execution and run evidence are not yet available |
+| `/tests` | Create/list cases, record actual results by run status, inspect execution history | Implemented for manual execution; test suites/assignment remain outstanding |
 | `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
 | `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
@@ -106,8 +106,9 @@ Alembic revision `20261117_0004` adds persisted test cases and defects. The API
 validates requirement/test references against the active project, assigns
 readable IDs, records audit and outbox events, and supports defect status
 changes. The `/tests` and `/defects` screens create and list those records.
-Automated runs, execution evidence, and broader multi-entity trace views remain
-open. The refreshed installer and packaged-sidecar smoke check passed.
+Automated runs and broader multi-entity trace views remain open. Manual
+execution evidence is now persisted. The refreshed installer and
+packaged-sidecar smoke check passed with the test execution migration included.
 
 ## AI requirement intelligence progress
 

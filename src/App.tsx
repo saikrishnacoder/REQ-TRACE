@@ -8,8 +8,8 @@ import {
   Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createTestCase, getDefects, getRequirementAnalyses, getTestCases, getTraceability, updateDefect } from './services/persistence';
-import type { DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getDefects, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, updateDefect } from './services/persistence';
+import type { DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -648,13 +648,15 @@ function AIIntelligencePage({ project, requirements, updateRequirement }: { proj
 
 function TestCasesPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
   const [records, setRecords] = useState<TestCaseRecord[]>([]);
+  const [executions, setExecutions] = useState<TestExecutionRecord[]>([]);
+  const [actuals, setActuals] = useState<Record<string, string>>({});
   const [title, setTitle] = useState('');
   const [preconditions, setPreconditions] = useState('');
   const [steps, setSteps] = useState('');
   const [expected, setExpected] = useState('');
   const [requirementId, setRequirementId] = useState('');
   const [error, setError] = useState('');
-  const refresh = () => getTestCases(project.id).then(setRecords).catch(() => setError('Test cases require the local API to be available.'));
+  const refresh = async () => { try { const [cases, runs] = await Promise.all([getTestCases(project.id), getTestExecutions(project.id)]); setRecords(cases); setExecutions(runs); } catch { setError('Test cases and execution history require the local API to be available.'); } };
   useEffect(() => { void refresh(); }, [project.id]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -663,10 +665,16 @@ function TestCasesPage({ project, requirements }: { project: Project; requiremen
       setTitle(''); setPreconditions(''); setSteps(''); setExpected(''); setError(''); await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not save test case.'); }
   };
+  const execute = async (testCase: TestCaseRecord, status: TestExecutionRecord['status']) => {
+    const actualResult = actuals[testCase.id]?.trim();
+    if (!actualResult) { setError('Enter the actual result before recording this run.'); return; }
+    try { await createTestExecution(testCase.id, status, actualResult); setError(''); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not record test execution.'); }
+  };
   return <div className="narrow-page"><div className="eyebrow">VERIFICATION · {project.key}</div><h1 className="page-heading">Test cases</h1><p className="page-subheading">Create persisted manual checks and connect them to requirements.</p>
     {error && <div className="sync-alert" role="status">{error}</div>}
     <section className="surface form-surface"><form className="form-stack" onSubmit={submit}><label>Test case title<input required maxLength={300} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Reject expired payment card" /></label><label>Requirement <span className="optional">Optional</span><select value={requirementId} onChange={(e) => setRequirementId(e.target.value)}><option value="">Unlinked</option>{requirements.map((r) => <option key={r.id} value={r.id}>{r.code} · {r.title}</option>)}</select></label><label>Preconditions<textarea rows={2} value={preconditions} onChange={(e) => setPreconditions(e.target.value)} /></label><label>Steps <small>One step per line</small><textarea required rows={4} value={steps} onChange={(e) => setSteps(e.target.value)} placeholder={'Open checkout\nEnter expired card details\nSubmit payment'} /></label><label>Expected result<textarea required rows={2} value={expected} onChange={(e) => setExpected(e.target.value)} /></label><button className="button button-primary" type="submit"><Plus size={15} /> Save test case</button></form></section>
-    <section className="surface trace-matrix-surface"><div className="section-heading"><div><span className="eyebrow">TEST INVENTORY</span><h2>{records.length} test cases</h2></div></div>{records.length === 0 ? <EmptyState icon={<ListChecks size={18} />} title="No test cases yet" text="Add a manual test case above to start connecting requirements to verification." /> : records.map((r) => <article className="test-case-card" key={r.id}><span className="requirement-id">{r.code} · {r.requirementId ? requirements.find((x) => x.id === r.requirementId)?.code ?? 'Requirement' : 'Unlinked'}</span><h3>{r.title}</h3><ol>{r.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p><b>Expected:</b> {r.expectedResult}</p></article>)}</section>
+    <section className="surface trace-matrix-surface"><div className="section-heading"><div><span className="eyebrow">TEST INVENTORY</span><h2>{records.length} test cases · {executions.length} runs</h2></div></div>{records.length === 0 ? <EmptyState icon={<ListChecks size={18} />} title="No test cases yet" text="Add a manual test case above to start connecting requirements to verification." /> : records.map((r) => { const latest = executions.find((run) => run.testCaseId === r.id); return <article className="test-case-card" key={r.id}><span className="requirement-id">{r.code} · {r.requirementId ? requirements.find((x) => x.id === r.requirementId)?.code ?? 'Requirement' : 'Unlinked'}</span><h3>{r.title}</h3><ol>{r.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p><b>Expected:</b> {r.expectedResult}</p><label>Actual result<textarea rows={2} value={actuals[r.id] ?? ''} onChange={(e) => setActuals((items) => ({ ...items, [r.id]: e.target.value }))} placeholder="Record what happened during this run" /></label><div className="test-run-actions"><span>{latest ? `Latest: ${latest.status} · ${dateLabel(latest.executedAt)}` : 'Not run'}</span>{(['Passed','Failed','Blocked','Skipped'] as const).map((status) => <button key={status} className="button button-secondary button-small" onClick={() => void execute(r, status)}>{status}</button>)}</div>{latest && <details className="test-history"><summary>View run history ({executions.filter((run) => run.testCaseId === r.id).length})</summary>{executions.filter((run) => run.testCaseId === r.id).map((run) => <p key={run.id}><b>{run.status}</b> · {dateLabel(run.executedAt)} · {run.actualResult}</p>)}</details>}</article>; })}</section>
   </div>;
 }
 

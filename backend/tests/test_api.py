@@ -187,6 +187,12 @@ def test_test_cases_and_defects_are_persisted_and_audited(client: TestClient) ->
     })
     assert test_case.status_code == 201
     assert test_case.json()["code"] == "QA-TC-001"
+    execution = client.post(f"/api/v1/test-cases/{test_case.json()['id']}/executions", json={
+        "status": "Failed", "actualResult": "The dashboard did not appear after submission.",
+    })
+    assert execution.status_code == 201
+    assert execution.json()["status"] == "Failed"
+    assert client.get(f"/api/v1/projects/{project['id']}/test-executions").json()[0]["testCaseId"] == test_case.json()["id"]
     defect = client.post(f"/api/v1/projects/{project['id']}/defects", json={
         "requirementId": requirement["id"], "testCaseId": test_case.json()["id"],
         "title": "Submit button does nothing", "description": "The form remains unchanged.", "severity": "High",
@@ -197,7 +203,7 @@ def test_test_cases_and_defects_are_persisted_and_audited(client: TestClient) ->
     assert len(client.get(f"/api/v1/projects/{project['id']}/test-cases").json()) == 1
     assert len(client.get(f"/api/v1/projects/{project['id']}/defects").json()) == 1
     actions = {item["action"] for item in client.get(f"/api/v1/projects/{project['id']}/audit").json()}
-    assert {"test_case_created", "defect_created", "defect_status_changed"} <= actions
+    assert {"test_case_created", "test_execution_recorded", "defect_created", "defect_status_changed"} <= actions
 
 
 def test_test_case_rejects_cross_project_requirement(client: TestClient) -> None:

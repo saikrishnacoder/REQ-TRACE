@@ -77,3 +77,13 @@ environment. No key is included in the frontend or source control. External
 provider behavior remains unverified without credentials. AI test generation,
 grounded assistant conversations, streamed responses, and acceptance/rejection
 of all suggestion types are still planned.
+
+## Manual test execution history slice (2026-11-17)
+
+Revision `20261117_0006` persists each manual execution with status and actual
+result. The test case screen can record Passed, Failed, Blocked, or Skipped
+runs and inspect prior execution history. Events are audited and queued for
+future sync. Test suite management, tester assignment, automated execution,
+and run evidence attachments remain outstanding. TypeScript and all 12 backend
+tests pass; the packaged Windows installer and sidecar smoke test pass for this
+revision (28.84 MiB installer).

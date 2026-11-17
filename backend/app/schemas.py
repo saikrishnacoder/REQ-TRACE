@@ -192,6 +192,20 @@ class DefectRead(APIModel):
     created_at: datetime
 
 
+class TestExecutionCreate(APIModel):
+    status: Literal["Passed", "Failed", "Blocked", "Skipped"]
+    actual_result: str = Field(min_length=1, max_length=5000)
+
+
+class TestExecutionRead(APIModel):
+    id: str
+    project_id: str
+    test_case_id: str
+    status: str
+    actual_result: str
+    executed_at: datetime
+
+
 class AnalysisIssue(APIModel):
     category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
     explanation: str = Field(min_length=1, max_length=1000)
