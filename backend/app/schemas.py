@@ -277,6 +277,28 @@ class GitHubLinkRead(APIModel):
     record: GitHubRecordRead
 
 
+class AutomationRuleUpdate(APIModel):
+    enabled: bool
+
+
+class AutomationRuleRead(APIModel):
+    id: str
+    project_id: str
+    rule_key: Literal["orphan_requirements", "untested_requirements", "critical_defects"]
+    enabled: bool
+    updated_at: datetime
+
+
+class AutomationRunRead(APIModel):
+    id: str
+    project_id: str
+    rule_key: str
+    status: Literal["success", "failed"]
+    findings: list[str]
+    detail: str
+    executed_at: datetime
+
+
 class AnalysisIssue(APIModel):
     category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
     explanation: str = Field(min_length=1, max_length=1000)

@@ -217,3 +217,9 @@ export const getProjectGitHubData = (projectId: string) => request<{ repositorie
 export const syncGitHubRepository = (projectId: string, fullName: string) => request<{ repository: GitHubRepositoryRecord; recordsImported: number; syncedAt: string }>(`/projects/${projectId}/github/repositories`, { method: 'POST', body: JSON.stringify({ fullName }) });
 export const createGitHubRequirementLink = (requirementId: string, recordId: string) => request<GitHubLinkRecord>(`/requirements/${requirementId}/github-links`, { method: 'POST', body: JSON.stringify({ recordId }) });
 export const getGitHubRequirementLinks = (projectId: string) => request<GitHubLinkRecord[]>(`/projects/${projectId}/github/links`);
+export interface AutomationRuleRecord { id: string; projectId: string; ruleKey: 'orphan_requirements' | 'untested_requirements' | 'critical_defects'; enabled: boolean; updatedAt: string }
+export interface AutomationRunRecord { id: string; projectId: string; ruleKey: string; status: 'success' | 'failed'; findings: string[]; detail: string; executedAt: string }
+export const getAutomationRules = (projectId: string) => request<AutomationRuleRecord[]>(`/projects/${projectId}/automation/rules`);
+export const setAutomationRule = (projectId: string, key: AutomationRuleRecord['ruleKey'], enabled: boolean) => request<AutomationRuleRecord>(`/projects/${projectId}/automation/rules/${key}`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+export const runAutomationRule = (projectId: string, key: AutomationRuleRecord['ruleKey']) => request<AutomationRunRecord>(`/projects/${projectId}/automation/rules/${key}/run`, { method: 'POST' });
+export const getAutomationRuns = (projectId: string) => request<AutomationRunRecord[]>(`/projects/${projectId}/automation/runs`);

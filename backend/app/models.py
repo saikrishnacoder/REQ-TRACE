@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.oracle import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -231,3 +231,27 @@ class GitHubLink(Base):
     requirement_id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
     record_id: Mapped[str] = mapped_column("RECORD_ID", String(36), ForeignKey("RT_GITHUB_RECORDS.RECORD_ID", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class AutomationRule(Base):
+    __tablename__ = "RT_AUTOMATION_RULES"
+    __table_args__ = (UniqueConstraint("PROJECT_ID", "RULE_KEY", name="UQ_RT_AUTO_PROJECT_RULE"),)
+
+    id: Mapped[str] = mapped_column("RULE_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    rule_key: Mapped[str] = mapped_column("RULE_KEY", String(60), nullable=False)
+    enabled: Mapped[bool] = mapped_column("ENABLED", Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class AutomationRun(Base):
+    __tablename__ = "RT_AUTOMATION_RUNS"
+    __table_args__ = (Index("IX_RT_AUTO_RUN_PROJECT", "PROJECT_ID", "EXECUTED_AT"),)
+
+    id: Mapped[str] = mapped_column("RUN_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    rule_key: Mapped[str] = mapped_column("RULE_KEY", String(60), nullable=False)
+    status: Mapped[str] = mapped_column("STATUS", String(12), nullable=False)
+    result_json: Mapped[str] = mapped_column("RESULT_JSON", Text, nullable=False)
+    detail: Mapped[str] = mapped_column("DETAIL", Text, nullable=False, default="")
+    executed_at: Mapped[datetime] = mapped_column("EXECUTED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

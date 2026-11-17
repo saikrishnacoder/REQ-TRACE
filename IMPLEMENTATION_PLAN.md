@@ -125,3 +125,14 @@ supports refresh and CSV export with spreadsheet-formula cells neutralized.
 PDF/XLSX, date filters, and scheduled report generation are still open.
 TypeScript and Vite builds pass, and the refreshed 28.86 MiB installer plus
 packaged-sidecar smoke test pass.
+
+## Automation checks slice
+
+Revision `20261117_0009` adds persisted rule enablement and execution history.
+The `/automation` page exposes three read-only checks: orphan requirements,
+requirements without linked tests, and open critical defects. Users enable a
+rule before triggering it; results and finding lists are saved and audited.
+No automatic notifications, schedules, or write actions run. API tests cover
+enablement, execution results, disabled-run rejection, and history. Installer
+packaging and sidecar smoke test pass; TypeScript and all 16 backend tests
+pass. The refreshed 28.87 MiB installer includes this migration.

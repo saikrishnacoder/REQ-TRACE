@@ -5,11 +5,11 @@ import {
   ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Github, Inbox, Layers3,
   ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
-  Download, Sparkles, Trash2, Upload, X
+  Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createGitHubRequirementLink, createTestCase, createTestExecution, getAvailableGitHubRepositories, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, sendAssistantMessage, syncGitHubRepository, updateDefect } from './services/persistence';
-import type { AuditRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createGitHubRequirementLink, createTestCase, createTestExecution, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
+import type { AuditRecord, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -273,6 +273,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
           <NavLink to="/github" aria-label="GitHub integration" title="GitHub integration" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Github size={17} /><span>GitHub</span></NavLink>
           <NavLink to="/reports" aria-label="Reports and analytics" title="Reports and analytics" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><BarChart3 size={17} /><span>Reports</span></NavLink>
+          <NavLink to="/automation" aria-label="Automation" title="Automation" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Workflow size={17} /><span>Automation</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
@@ -304,6 +305,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
             <Route path="/github" element={<GitHubPage project={props.project} requirements={props.requirements} />} />
             <Route path="/reports" element={<ReportsPage project={props.project} requirements={props.requirements} />} />
+            <Route path="/automation" element={<AutomationPage project={props.project} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
@@ -669,6 +671,26 @@ function AssistantPage({ project }: { project: Project }) {
     {error && <div className="sync-alert" role="status">{error}</div>}
     <div className="assistant-layout"><aside className="surface assistant-conversations"><div className="section-heading"><div><span className="eyebrow">HISTORY</span><h2>Conversations</h2></div><button className="button button-secondary button-small" onClick={() => { setActiveId(''); setMessages([]); setError(''); }}>New</button></div>{conversations.map((item) => <button className={`ai-requirement-row${activeId === item.id ? ' active' : ''}`} key={item.id} onClick={() => void selectConversation(item.id)}><b>{item.title}</b><small>{dateLabel(item.updatedAt)}</small></button>)}</aside>
       <section className="surface assistant-thread"><div className="assistant-messages">{messages.length === 0 ? <EmptyState icon={<MessageSquareText size={18} />} title="Ask about this project" text="Try “Which requirements have test cases?” or “Summarize the open defects.”" /> : messages.map((message) => <article className={`assistant-message ${message.role}`} key={message.id}><b>{message.role === 'user' ? 'You' : `ReqTrace · ${message.provider}`}</b><p>{message.content}</p>{message.sources.length > 0 && <div className="assistant-sources"><span>Sources</span>{message.sources.map((source) => <Link key={source.id} to={source.path}>{source.code} · {source.title}</Link>)}</div>}</article>)}</div><form className="assistant-composer" onSubmit={send}><textarea rows={3} maxLength={10000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask a question grounded in this project…" /><div><small>Answers are based on stored project records and may include recommendations when an AI provider is configured.</small><button className="button button-primary" disabled={busy || !draft.trim()} type="submit">{busy ? 'Thinking…' : 'Send'}<ArrowRight size={14} /></button></div></form></section></div>
+  </div>;
+}
+
+function AutomationPage({ project }: { project: Project }) {
+  const [rules, setRules] = useState<AutomationRuleRecord[]>([]);
+  const [runs, setRuns] = useState<AutomationRunRecord[]>([]);
+  const [busyKey, setBusyKey] = useState('');
+  const [error, setError] = useState('');
+  const refresh = async () => { try { const [ruleRows, runRows] = await Promise.all([getAutomationRules(project.id), getAutomationRuns(project.id)]); setRules(ruleRows); setRuns(runRows); setError(''); } catch { setError('Automation settings and history require the local API.'); } };
+  useEffect(() => { void refresh(); }, [project.id]);
+  const descriptions: Record<AutomationRuleRecord['ruleKey'], { title: string; detail: string }> = {
+    orphan_requirements: { title: 'Orphan requirements', detail: 'Find active requirements without a requirement relationship.' },
+    untested_requirements: { title: 'Requirements without tests', detail: 'Find active requirements without a linked test case.' },
+    critical_defects: { title: 'Open critical defects', detail: 'List critical defects that are not resolved or closed.' },
+  };
+  const toggle = async (rule: AutomationRuleRecord) => { setBusyKey(rule.ruleKey); try { await setAutomationRule(project.id, rule.ruleKey, !rule.enabled); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not update automation rule.'); } finally { setBusyKey(''); } };
+  const run = async (rule: AutomationRuleRecord) => { setBusyKey(rule.ruleKey); try { await runAutomationRule(project.id, rule.ruleKey); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Automation run failed.'); } finally { setBusyKey(''); } };
+  return <div className="narrow-page"><div className="eyebrow"><Workflow size={13} /> RULES · {project.key}</div><h1 className="page-heading">Automation</h1><p className="page-subheading">Enable read-only quality checks and run them when you choose. Each run is recorded in project history.</p><div className="ai-disclosure"><ShieldCheck size={16} /><span>These rules do not send notifications or modify project records. Scheduling and external actions are not enabled.</span></div>{error && <div className="sync-alert" role="status">{error}</div>}
+    <div className="automation-rules">{rules.map((rule) => <section className="surface automation-rule" key={rule.id}><div><span className="eyebrow">READ-ONLY CHECK</span><h2>{descriptions[rule.ruleKey].title}</h2><p>{descriptions[rule.ruleKey].detail}</p></div><div className="automation-actions"><label className="automation-toggle"><input type="checkbox" checked={rule.enabled} disabled={!!busyKey} onChange={() => void toggle(rule)} />{rule.enabled ? 'Enabled' : 'Disabled'}</label><button className="button button-secondary button-small" disabled={!rule.enabled || !!busyKey} onClick={() => void run(rule)}>{busyKey === rule.ruleKey ? 'Running…' : 'Run now'}</button></div></section>)}</div>
+    <section className="surface automation-history"><div className="section-heading"><div><span className="eyebrow">EXECUTION HISTORY</span><h2>{runs.length} recent runs</h2></div></div>{runs.length ? runs.map((item) => <details className="automation-run" key={item.id}><summary><span className={`automation-status ${item.status}`}>{item.status}</span><b>{descriptions[item.ruleKey as AutomationRuleRecord['ruleKey']]?.title ?? item.ruleKey}</b><small>{dateLabel(item.executedAt)} · {item.findings.length} finding(s)</small></summary><p>{item.detail}</p>{item.findings.length ? <ul>{item.findings.map((finding, i) => <li key={i}>{finding}</li>)}</ul> : <p>No findings.</p>}</details>) : <EmptyState icon={<Workflow size={18} />} title="No automation runs" text="Enable a check and run it to create an auditable execution record." />}</section>
   </div>;
 }
 

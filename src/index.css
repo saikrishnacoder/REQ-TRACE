@@ -563,7 +563,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .report-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-preview { margin-top: 16px; overflow: hidden; }
 .report-limit { display: block; padding: 10px 18px; color: #929db3; }
+.automation-rules { display: grid; gap: 12px; margin: 18px 0; }
+.automation-rule { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px 20px; }
+.automation-rule h2 { margin: 6px 0; color: #edf0f7; font-size: 15px; }
+.automation-rule p { margin: 0; color: #9aa5bc; font-size: 12px; line-height: 1.5; }
+.automation-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+.automation-toggle { display: flex; align-items: center; gap: 7px; color: #c0c8d8; font-size: 12px; }
+.automation-toggle input { accent-color: #8b5cf6; }
+.automation-history { overflow: hidden; }
+.automation-run { padding: 13px 18px; border-top: 1px solid #293348; color: #aab3c6; }
+.automation-run summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.automation-run summary::-webkit-details-marker { display: none; }
+.automation-run summary b { color: #e3e7f0; font-size: 12px; }
+.automation-run summary small { margin-left: auto; color: #909bb2; }
+.automation-run p, .automation-run ul { font-size: 12px; line-height: 1.55; }
+.automation-status { border-radius: 10px; padding: 3px 7px; color: #74d5a4; background: #163225; font-size: 10px; text-transform: uppercase; }
+.automation-status.failed { color: #f29a9a; background: #3a1e25; }
 @media (max-width: 640px) { .report-toolbar { align-items: stretch; flex-direction: column; } .report-toolbar label { min-width: 0; } }
+@media (max-width: 640px) { .automation-rule { align-items: flex-start; flex-direction: column; } .automation-actions { width: 100%; justify-content: space-between; } }
 @media (max-width: 640px) { .github-connect-row { align-items: stretch; flex-direction: column; } .github-connect-row button { align-self: flex-start; } }
 @media (max-width: 850px) { .assistant-layout { grid-template-columns: 1fr; } .assistant-thread { min-height: 420px; } }
 @media (max-width: 850px) { .ai-layout { grid-template-columns: 1fr; } .ai-score-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ai-overall { grid-column: 1 / -1; } }

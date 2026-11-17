@@ -313,3 +313,24 @@ def test_github_read_only_sync_imports_records_without_exposing_token(client: Te
     assert linked.status_code == 201
     assert linked.json()["record"]["externalId"] == "17"
     assert any(item["action"] == "github_reference_linked" for item in client.get(f"/api/v1/projects/{project['id']}/audit").json())
+
+
+def test_automation_read_only_rule_toggle_run_and_history(client: TestClient) -> None:
+    project = client.post("/api/v1/projects", json={"name": "Automation", "key": "AUTO"}).json()
+    requirements = []
+    for title in ("First item", "Second item"):
+        requirements.append(client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+            "title": title, "statement": f"The app supports {title.lower()}.", "type": "Functional", "priority": "Low",
+            "sourceType": "Manual", "sourceReference": "Manual", "originalText": title,
+        }).json())
+    rules = client.get(f"/api/v1/projects/{project['id']}/automation/rules").json()
+    orphan_rule = next(item for item in rules if item["ruleKey"] == "orphan_requirements")
+    assert client.post(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements/run").status_code == 409
+    enabled = client.put(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements", json={"enabled": True})
+    assert enabled.status_code == 200 and enabled.json()["enabled"] is True
+    run = client.post(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements/run")
+    assert run.status_code == 201
+    assert len(run.json()["findings"]) == 2
+    assert client.get(f"/api/v1/projects/{project['id']}/automation/runs").json()[0]["ruleKey"] == "orphan_requirements"
+    client.put(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements", json={"enabled": False})
+    assert client.post(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements/run").status_code == 409

@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models import AuditEvent, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
+from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementLink, SyncOutboxEvent, TestCase, TestExecution
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -44,7 +44,7 @@ app.add_middleware(
         "http://tauri.localhost",
         "tauri://localhost",
     ],
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
@@ -820,6 +820,90 @@ def create_github_requirement_link(requirement_id: str, payload: GitHubLinkCreat
     db.refresh(link)
     return {"id": link.id, "project_id": link.project_id, "requirement_id": link.requirement_id,
         "record_id": link.record_id, "created_at": link.created_at, "record": record}
+
+
+AUTOMATION_RULES = {
+    "orphan_requirements": "Find requirements without requirement relationships",
+    "untested_requirements": "Find requirements without linked test cases",
+    "critical_defects": "Find open critical defects",
+}
+
+
+@app.get("/api/v1/projects/{project_id}/automation/rules", response_model=list[AutomationRuleRead])
+def list_automation_rules(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rules = {item.rule_key: item for item in db.scalars(select(AutomationRule).where(AutomationRule.project_id == project_id)).all()}
+    now = datetime.now(timezone.utc)
+    for key in AUTOMATION_RULES:
+        if key not in rules:
+            rule = AutomationRule(id=str(uuid.uuid4()), project_id=project_id, rule_key=key, enabled=False, updated_at=now)
+            db.add(rule)
+            rules[key] = rule
+    db.commit()
+    return list(rules.values())
+
+
+@app.put("/api/v1/projects/{project_id}/automation/rules/{rule_key}", response_model=AutomationRuleRead)
+def set_automation_rule(project_id: str, rule_key: str, payload: AutomationRuleUpdate, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if rule_key not in AUTOMATION_RULES:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    rule = db.scalar(select(AutomationRule).where(AutomationRule.project_id == project_id, AutomationRule.rule_key == rule_key))
+    if rule is None:
+        rule = AutomationRule(id=str(uuid.uuid4()), project_id=project_id, rule_key=rule_key, enabled=payload.enabled)
+        db.add(rule)
+    else:
+        rule.enabled = payload.enabled
+        rule.updated_at = datetime.now(timezone.utc)
+    append_audit(db, project_id, "automation_rule_updated", detail={"ruleKey": rule_key, "enabled": payload.enabled})
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+@app.get("/api/v1/projects/{project_id}/automation/runs", response_model=list[AutomationRunRead])
+def list_automation_runs(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    runs = db.scalars(select(AutomationRun).where(AutomationRun.project_id == project_id)
+        .order_by(AutomationRun.executed_at.desc()).limit(100)).all()
+    return [{"id": run.id, "project_id": run.project_id, "rule_key": run.rule_key, "status": run.status,
+        "findings": json.loads(run.result_json), "detail": run.detail, "executed_at": run.executed_at} for run in runs]
+
+
+@app.post("/api/v1/projects/{project_id}/automation/rules/{rule_key}/run", response_model=AutomationRunRead, status_code=status.HTTP_201_CREATED)
+def run_automation_rule(project_id: str, rule_key: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rule = db.scalar(select(AutomationRule).where(AutomationRule.project_id == project_id, AutomationRule.rule_key == rule_key))
+    if rule is None or not rule.enabled:
+        raise HTTPException(status_code=409, detail="Enable this automation rule before running it")
+    active_requirements = list(db.scalars(select(Requirement).where(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))).all())
+    if rule_key == "orphan_requirements":
+        links = db.scalars(select(RequirementLink).where(RequirementLink.project_id == project_id)).all()
+        linked = {link.source_requirement_id for link in links} | {link.target_requirement_id for link in links}
+        findings = [f"{item.code}: {item.title}" for item in active_requirements if item.id not in linked]
+    elif rule_key == "untested_requirements":
+        covered = set(db.scalars(select(TestCase.requirement_id).where(TestCase.project_id == project_id, TestCase.requirement_id.is_not(None))).all())
+        findings = [f"{item.code}: {item.title}" for item in active_requirements if item.id not in covered]
+    elif rule_key == "critical_defects":
+        defects = db.scalars(select(Defect).where(Defect.project_id == project_id, Defect.severity == "Critical", Defect.status.not_in(["Resolved", "Closed"]))).all()
+        findings = [f"{item.code}: {item.title}" for item in defects]
+    else:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    now = datetime.now(timezone.utc)
+    run = AutomationRun(id=str(uuid.uuid4()), project_id=project_id, rule_key=rule_key, status="success",
+        result_json=json.dumps(findings, ensure_ascii=False), detail=f"Completed read-only check; {len(findings)} finding(s).", executed_at=now)
+    db.add(run)
+    append_audit(db, project_id, "automation_rule_executed", detail={"ruleKey": rule_key, "runId": run.id, "findingCount": len(findings)})
+    append_sync_event(db, "automation_run.created", "automation_run", run.id,
+        {"id": run.id, "projectId": project_id, "ruleKey": rule_key, "status": run.status, "findings": findings, "executedAt": now.isoformat()})
+    db.commit()
+    db.refresh(run)
+    return {"id": run.id, "project_id": run.project_id, "rule_key": run.rule_key, "status": run.status,
+        "findings": findings, "detail": run.detail, "executed_at": run.executed_at}
 
 
 @app.get("/")
