@@ -33,6 +33,9 @@ def main() -> None:
         "--specpath", str(build_dir), "--paths", str(BACKEND_DIR),
         "--collect-submodules", "uvicorn", "--collect-submodules", "fastapi",
         "--collect-submodules", "sqlalchemy", "--collect-submodules", "pydantic_settings",
+        "--collect-submodules", "alembic",
+        "--add-data", f"{BACKEND_DIR / 'alembic.ini'}{os.pathsep}.",
+        "--add-data", f"{BACKEND_DIR / 'alembic'}{os.pathsep}alembic",
         str(BACKEND_DIR / "sidecar.py"),
     ]
     subprocess.run(command, cwd=BACKEND_DIR, check=True)

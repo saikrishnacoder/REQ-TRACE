@@ -1,12 +1,15 @@
-"""Create the ReqTrace tables in the configured database."""
+"""Upgrade the configured ReqTrace database to the latest schema."""
 
-from app.database import Base, engine
-from app import models  # noqa: F401 - register ORM models with Base
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
 
 
 def main() -> None:
-    Base.metadata.create_all(bind=engine)
-    print(f"ReqTrace {engine.dialect.name} schema is ready.")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    command.upgrade(config, "head")
+    print("ReqTrace database schema is up to date.")
 
 
 if __name__ == "__main__":

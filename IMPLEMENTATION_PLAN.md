@@ -41,3 +41,16 @@ database mode, and the Tauri/PyInstaller packaging foundation. Oracle server
 mode is available for database development, but remote synchronization,
 authentication, multi-user authorization, document parsing, and AI extraction
 are not yet enabled. No network service is exposed without those protections.
+
+## Audit and hardening update (2026-11-17)
+
+See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the repository-wide baseline and
+route inventory. The first follow-up slices add non-destructive Alembic
+bootstrap/upgrade support, a soft-delete migration with retained audit history,
+priority filtering, sorting, pagination, CSV export, a dark navy/violet theme,
+an explicit not-found page, and visible storage/sync errors. A persisted
+requirement-to-requirement traceability module now creates/removes links,
+records link audit events, and reports linked/orphan requirements. API,
+migration, and packaged-sidecar checks cover these workflows. AI, GitHub,
+test/defect management, full multi-entity traceability, reports, and automation
+remain future phases; see the audit report for sequencing and boundaries.

@@ -5,21 +5,25 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import Base, engine, get_db
-from app.models import AuditEvent, Project, Requirement, SyncOutboxEvent
-from app.schemas import AuditEventRead, ProjectCreate, ProjectRead, RequirementCreate, RequirementRead, RequirementUpdate
+from app.database import engine, get_db
+from app.models import AuditEvent, Project, Requirement, RequirementLink, SyncOutboxEvent
+from app.schemas import AuditEventRead, ProjectCreate, ProjectRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # A desktop install must be usable immediately and persist records locally.
     # Server deployments use the same schema but are initialized explicitly.
     if settings.database_mode.casefold() == "local":
-        Base.metadata.create_all(bind=engine)
+        config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        command.upgrade(config, "head")
     yield
 
 
@@ -117,7 +121,10 @@ def create_project(payload: ProjectCreate, response: Response, db: Session = Dep
 def list_requirements(project_id: str, db: Session = Depends(get_db)):
     if db.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    query = select(Requirement).where(Requirement.project_id == project_id).order_by(Requirement.created_at.desc())
+    query = select(Requirement).where(
+        Requirement.project_id == project_id,
+        Requirement.deleted_at.is_(None),
+    ).order_by(Requirement.created_at.desc())
     return list(db.scalars(query).all())
 
 
@@ -225,12 +232,116 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
     return requirement
 
 
+@app.delete("/api/v1/requirements/{requirement_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_requirement(requirement_id: str, db: Session = Depends(get_db)) -> Response:
+    requirement = db.get(Requirement, requirement_id)
+    if requirement is None or requirement.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    deleted_at = datetime.now(timezone.utc)
+    requirement.deleted_at = deleted_at
+    append_audit(db, requirement.project_id, "requirement_deleted", requirement.id, {"code": requirement.code})
+    append_sync_event(db, "requirement.delete", "requirement", requirement.id, {
+        "id": requirement.id,
+        "projectId": requirement.project_id,
+        "deletedAt": deleted_at.isoformat(),
+    })
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get("/api/v1/projects/{project_id}/audit", response_model=list[AuditEventRead])
 def list_audit_events(project_id: str, db: Session = Depends(get_db)):
     if db.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     query = select(AuditEvent).where(AuditEvent.project_id == project_id).order_by(AuditEvent.created_at.desc())
     return list(db.scalars(query).all())
+
+
+@app.get("/api/v1/projects/{project_id}/traceability", response_model=TraceabilityRead)
+def project_traceability(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    requirements = list(db.scalars(
+        select(Requirement)
+        .where(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
+        .order_by(Requirement.code)
+    ).all())
+    links = list(db.scalars(
+        select(RequirementLink)
+        .where(RequirementLink.project_id == project_id)
+        .order_by(RequirementLink.created_at.desc())
+    ).all())
+    linked_ids = {item.source_requirement_id for item in links} | {item.target_requirement_id for item in links}
+    orphan_ids = [item.id for item in requirements if item.id not in linked_ids]
+    linked_percent = round((len(requirements) - len(orphan_ids)) * 100 / len(requirements)) if requirements else 0
+    return {
+        "requirements": requirements,
+        "links": links,
+        "orphan_requirement_ids": orphan_ids,
+        "linked_percent": linked_percent,
+    }
+
+
+@app.post("/api/v1/requirements/{requirement_id}/links", response_model=RequirementLinkRead, status_code=status.HTTP_201_CREATED)
+def create_requirement_link(requirement_id: str, payload: RequirementLinkCreate, db: Session = Depends(get_db)):
+    source = db.get(Requirement, requirement_id)
+    target = db.get(Requirement, payload.target_requirement_id)
+    if source is None or source.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Source requirement not found")
+    if target is None or target.deleted_at is not None or target.project_id != source.project_id:
+        raise HTTPException(status_code=404, detail="Target requirement not found in this project")
+    if source.id == target.id:
+        raise HTTPException(status_code=422, detail="A requirement cannot link to itself")
+    duplicate = db.scalar(select(RequirementLink).where(
+        RequirementLink.source_requirement_id == source.id,
+        RequirementLink.target_requirement_id == target.id,
+        RequirementLink.relationship_type == payload.relationship_type,
+    ))
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="This relationship already exists")
+
+    link = RequirementLink(
+        id=str(uuid.uuid4()),
+        project_id=source.project_id,
+        source_requirement_id=source.id,
+        target_requirement_id=target.id,
+        relationship_type=payload.relationship_type,
+    )
+    db.add(link)
+    append_audit(db, source.project_id, "requirement_link_created", source.id, {
+        "targetRequirementId": target.id,
+        "relationshipType": payload.relationship_type,
+    })
+    append_sync_event(db, "requirement_link.upsert", "requirement_link", link.id, {
+        "id": link.id,
+        "projectId": link.project_id,
+        "sourceRequirementId": link.source_requirement_id,
+        "targetRequirementId": link.target_requirement_id,
+        "relationshipType": link.relationship_type,
+    })
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@app.delete("/api/v1/requirements/{requirement_id}/links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_requirement_link(requirement_id: str, link_id: str, db: Session = Depends(get_db)) -> Response:
+    link = db.scalar(select(RequirementLink).where(
+        RequirementLink.id == link_id,
+        RequirementLink.source_requirement_id == requirement_id,
+    ))
+    if link is None:
+        raise HTTPException(status_code=404, detail="Requirement relationship not found")
+    append_audit(db, link.project_id, "requirement_link_deleted", requirement_id, {
+        "linkId": link.id,
+        "targetRequirementId": link.target_requirement_id,
+        "relationshipType": link.relationship_type,
+    })
+    append_sync_event(db, "requirement_link.delete", "requirement_link", link.id, {"id": link.id})
+    db.delete(link)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/")

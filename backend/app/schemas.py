@@ -7,6 +7,7 @@ RequirementType = Literal["Functional", "Non-functional", "Security", "Performan
 Priority = Literal["Critical", "High", "Medium", "Low"]
 SourceType = Literal["Conversation", "Document", "Manual"]
 RequirementStatus = Literal["Draft", "Under review", "Approved", "Rejected"]
+RelationshipType = Literal["depends_on", "relates_to", "conflicts_with"]
 
 
 class APIModel(BaseModel):
@@ -122,3 +123,24 @@ class AuditEventRead(APIModel):
     action: str
     detail: str
     created_at: datetime
+
+
+class RequirementLinkCreate(APIModel):
+    target_requirement_id: str = Field(min_length=1, max_length=36)
+    relationship_type: RelationshipType = "depends_on"
+
+
+class RequirementLinkRead(APIModel):
+    id: str
+    project_id: str
+    source_requirement_id: str
+    target_requirement_id: str
+    relationship_type: RelationshipType
+    created_at: datetime
+
+
+class TraceabilityRead(APIModel):
+    requirements: list[RequirementRead]
+    links: list[RequirementLinkRead]
+    orphan_requirement_ids: list[str]
+    linked_percent: int

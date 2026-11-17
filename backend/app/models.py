@@ -65,6 +65,7 @@ class Requirement(Base):
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
     reviewed_at: Mapped[datetime | None] = mapped_column("REVIEWED_AT", TIMESTAMP(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column("DELETED_AT", TIMESTAMP(timezone=True), nullable=True)
 
 
 class AuditEvent(Base):
@@ -94,3 +95,20 @@ class SyncOutboxEvent(Base):
     synced_at: Mapped[datetime | None] = mapped_column("SYNCED_AT", TIMESTAMP(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column("ATTEMPTS", Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column("LAST_ERROR", Text, nullable=True)
+
+
+class RequirementLink(Base):
+    __tablename__ = "RT_REQUIREMENT_LINKS"
+    __table_args__ = (
+        UniqueConstraint("SOURCE_REQUIREMENT_ID", "TARGET_REQUIREMENT_ID", "RELATIONSHIP_TYPE", name="UQ_RT_REQ_LINK_PAIR"),
+        CheckConstraint("SOURCE_REQUIREMENT_ID <> TARGET_REQUIREMENT_ID", name="CK_RT_REQ_LINK_NOT_SELF"),
+        CheckConstraint("RELATIONSHIP_TYPE IN ('depends_on','relates_to','conflicts_with')", name="CK_RT_REQ_LINK_TYPE"),
+        Index("IX_RT_REQ_LINK_PROJECT", "PROJECT_ID", "SOURCE_REQUIREMENT_ID"),
+    )
+
+    id: Mapped[str] = mapped_column("LINK_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    source_requirement_id: Mapped[str] = mapped_column("SOURCE_REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    target_requirement_id: Mapped[str] = mapped_column("TARGET_REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="CASCADE"), nullable=False)
+    relationship_type: Mapped[str] = mapped_column("RELATIONSHIP_TYPE", String(24), nullable=False, default="depends_on")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

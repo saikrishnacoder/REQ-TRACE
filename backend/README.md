@@ -17,7 +17,10 @@ For local Oracle XE development or the future shared server, set
 `DATABASE_MODE=oracle` in `.env`, then configure the `ORACLE_*` values. The
 dedicated schema user is created once from SQL*Plus using
 [`sql/create_app_user.sql`](sql/create_app_user.sql), and its tables are created
-with `python -m app.init_db`.
+or upgraded with `python -m app.init_db`. Schema revisions live in `alembic/`;
+the initial revision uses `checkfirst` so databases created by the earlier
+`create_all` release keep their tables and records. New schema changes should
+be added as explicit Alembic revisions.
 
 The Oracle adapter uses `python-oracledb`, the supported successor to
 `cx_Oracle`. It runs in Thick mode when `ORACLE_CLIENT_LIB_DIR` is configured,
@@ -41,11 +44,19 @@ python -m app.init_db
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+Install `requirements-dev.txt` to run the isolated API and migration checks:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+
 API docs: `http://127.0.0.1:8000/api/docs`.
 
 ## Persistence
 
-The desktop's local SQLite database is the offline source of truth. The React
+The desktop's local SQLite database is the offline source of truth. Local API
+startup applies pending Alembic revisions before serving requests. The React
 client also keeps a browser cache and retry outbox, so the workspace remains
 usable if its local Python process restarts. Oracle is reserved for the
 server-side team database; the sync API and authentication are not implemented

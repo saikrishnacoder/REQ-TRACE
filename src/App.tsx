@@ -4,10 +4,12 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate }
 import {
   ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Inbox, Layers3,
-  ListChecks, MessageSquareText, Plus, Search, Settings2, ShieldCheck,
-  Upload, X
+  ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
+  Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
+import { getTraceability } from './services/persistence';
+import type { TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -101,6 +103,7 @@ function App() {
   const [backendState, setBackendState] = useState<BackendState>('checking');
   const [backendDatabase, setBackendDatabase] = useState<DatabaseKind>(null);
   const [pendingCount, setPendingCount] = useState(() => pendingWriteCount());
+  const [syncError, setSyncError] = useState<string | null>(null);
   const currentProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
 
   useEffect(() => localStorage.setItem(STORAGE.projects, JSON.stringify(projects)), [projects]);
@@ -117,6 +120,7 @@ function App() {
       setBackendState(snapshot.online ? 'online' : 'offline');
       setBackendDatabase(snapshot.database === 'oracle' ? 'oracle' : snapshot.database === 'sqlite' ? 'sqlite' : null);
       setPendingCount(snapshot.pending);
+      setSyncError(snapshot.error);
       if (snapshot.online) {
         setProjects((current) => mergeRecords(snapshot.projects, current));
         setRequirements((current) => mergeRecords(snapshot.requirements, current));
@@ -161,10 +165,28 @@ function App() {
     void queueWrite('PATCH', `/requirements/${id}`, updates as Record<string, unknown>).then(updateConnectionStatus);
   };
 
-  function updateConnectionStatus(result: { online: boolean; database: string | null; pending: number }) {
+  const deleteRequirement = (id: string) => {
+    setRequirements((items) => items.filter((item) => item.id !== id));
+    void queueWrite('DELETE', `/requirements/${id}`).then(updateConnectionStatus);
+  };
+
+  const createRequirementLink = async (sourceId: string, targetId: string, relationshipType: string) => {
+    const result = await queueWrite('POST', `/requirements/${sourceId}/links`, { targetRequirementId: targetId, relationshipType });
+    updateConnectionStatus(result);
+    return result;
+  };
+
+  const deleteRequirementLink = async (sourceId: string, linkId: string) => {
+    const result = await queueWrite('DELETE', `/requirements/${sourceId}/links/${linkId}`);
+    updateConnectionStatus(result);
+    return result;
+  };
+
+  function updateConnectionStatus(result: { online: boolean; database: string | null; pending: number; error: string | null }) {
     setBackendState(result.online ? 'online' : 'offline');
     setBackendDatabase(result.database === 'oracle' ? 'oracle' : result.database === 'sqlite' ? 'sqlite' : null);
     setPendingCount(result.pending);
+    setSyncError(result.error);
   }
 
   return (
@@ -180,9 +202,13 @@ function App() {
           backendState={backendState}
           backendDatabase={backendDatabase}
           pendingCount={pendingCount}
+          syncError={syncError}
           requirements={requirements.filter((item) => item.projectId === currentProject.id)}
           createRequirement={createRequirement}
           updateRequirement={updateRequirement}
+          deleteRequirement={deleteRequirement}
+          createRequirementLink={createRequirementLink}
+          deleteRequirementLink={deleteRequirementLink}
         />
       )}
     </BrowserRouter>
@@ -197,9 +223,13 @@ interface WorkspaceProps {
   backendState: BackendState;
   backendDatabase: DatabaseKind;
   pendingCount: number;
+  syncError: string | null;
   requirements: Requirement[];
   createRequirement: (record: Omit<Requirement, 'id' | 'code' | 'projectId' | 'createdAt' | 'status'>) => void;
   updateRequirement: (id: string, updates: Partial<Requirement>) => void;
+  deleteRequirement: (id: string) => void;
+  createRequirementLink: (sourceId: string, targetId: string, relationshipType: string) => Promise<{ online: boolean; error: string | null }>;
+  deleteRequirementLink: (sourceId: string, linkId: string) => Promise<{ online: boolean; error: string | null }>;
 }
 
 function mergeRecords<T extends { id: string }>(preferred: T[], additional: T[]) {
@@ -212,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/new-project' ? 'Create project' : location.pathname.startsWith('/requirements') ? 'Requirements' : location.pathname.startsWith('/intake') ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Overview';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -237,10 +267,11 @@ function Workspace(props: WorkspaceProps) {
 
         <div className="sidebar-caption nav-caption">PROJECT</div>
         <nav className="side-nav">
-          <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
-          <NavLink to="/requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
-          <NavLink to="/intake" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Inbox size={17} /><span>Intake</span></NavLink>
-          <NavLink to="/project" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Settings2 size={17} /><span>Project settings</span></NavLink>
+          <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
+          <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
+          <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
+          <NavLink to="/intake" aria-label="Intake" title="Intake" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Inbox size={17} /><span>Intake</span></NavLink>
+          <NavLink to="/project" aria-label="Project settings" title="Project settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Settings2 size={17} /><span>Project settings</span></NavLink>
         </nav>
 
         <div className="sidebar-bottom">
@@ -258,14 +289,16 @@ function Workspace(props: WorkspaceProps) {
           <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-slash">/</span><b>{pageTitle}</b></div>
           <div className="topbar-right"><span className="local-badge"><span className="local-dot" />{props.backendState === 'checking' ? 'Checking storage' : props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database' : 'Local database' : props.pendingCount ? `Browser cache · ${props.pendingCount} pending` : 'Browser cache'}</span><button className="avatar-button" title="Local workspace">{props.project.key.slice(0, 1)}</button></div>
         </header>
+        {props.syncError && <div className="sync-alert" role="status"><span><b>Storage needs attention</b>{props.syncError}</span><small>{props.pendingCount} pending change{props.pendingCount === 1 ? '' : 's'}</small></div>}
         <div className="page-content">
           <Routes>
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} />} />
-            <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
+            <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
+            <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/intake" element={<IntakePage project={props.project} createRequirement={props.createRequirement} />} />
             <Route path="/project" element={<ProjectSettings project={props.project} />} />
             <Route path="/new-project" element={<NewProjectPage onCreate={(record) => { props.onCreateProject(record); navigate('/'); }} />} />
-            <Route path="*" element={<Overview project={props.project} requirements={props.requirements} />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </main>
@@ -412,20 +445,49 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
   </div>;
 }
 
-function RequirementsPage({ requirements, updateRequirement }: { requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement'] }) {
+function RequirementsPage({ requirements, updateRequirement, deleteRequirement }: { requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement']; deleteRequirement: WorkspaceProps['deleteRequirement'] }) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<'All' | RequirementStatus>('All');
+  const [priority, setPriority] = useState<'All' | Priority>('All');
+  const [sort, setSort] = useState<'newest' | 'oldest' | 'priority'>('newest');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const visible = useMemo(() => requirements.filter((item) => (filter === 'All' || item.status === filter) && `${item.code} ${item.title} ${item.statement}`.toLowerCase().includes(query.toLowerCase())), [requirements, filter, query]);
+  const visible = useMemo(() => {
+    const priorityOrder: Record<Priority, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+    return requirements
+      .filter((item) => (filter === 'All' || item.status === filter)
+        && (priority === 'All' || item.priority === priority)
+        && `${item.code} ${item.title} ${item.statement}`.toLowerCase().includes(query.toLowerCase()))
+      .sort((a, b) => sort === 'oldest'
+        ? a.createdAt.localeCompare(b.createdAt)
+        : sort === 'priority'
+          ? priorityOrder[a.priority] - priorityOrder[b.priority]
+          : b.createdAt.localeCompare(a.createdAt));
+  }, [requirements, filter, priority, query, sort]);
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageRecords = visible.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const selected = requirements.find((item) => item.id === selectedId);
+  const exportCsv = () => {
+    const columns: (keyof Requirement)[] = ['code', 'title', 'statement', 'type', 'priority', 'status', 'actor', 'preconditions', 'sourceType', 'sourceReference', 'createdAt'];
+    const escapeCsv = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const content = [columns.map(escapeCsv).join(','), ...visible.map((record) => columns.map((column) => escapeCsv(record[column])).join(','))].join('\r\n');
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'reqtrace-requirements.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
   return <>
     <div className="welcome-row"><div><div className="eyebrow">PROJECT RECORDS</div><h1 className="page-heading">Requirements</h1><p className="page-subheading">Review source-backed drafts before they enter the approved baseline.</p></div><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div>
     <section className="surface records-surface">
-      <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'Rejected'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => setFilter(status)}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search records" /></label></div>
-      {visible.length ? <RequirementRows requirements={visible} onSelect={setSelectedId} /> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search or status filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
+      <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'Rejected'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => { setFilter(status); setPage(1); }}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search records" /></label><select aria-label="Filter by priority" value={priority} onChange={(event) => { setPriority(event.target.value as 'All' | Priority); setPage(1); }}><option value="All">All priorities</option>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort requirements" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Priority</option></select><button className="button button-secondary button-small" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div></div>
+      {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
     </section>
-    {selected && <RequirementEditor requirement={selected} onClose={() => setSelectedId(null)} onSave={(updates) => updateRequirement(selected.id, updates)} />}
+    {selected && <RequirementEditor requirement={selected} onClose={() => setSelectedId(null)} onSave={(updates) => updateRequirement(selected.id, updates)} onDelete={() => { deleteRequirement(selected.id); setSelectedId(null); }} />}
   </>;
 }
 
@@ -436,7 +498,7 @@ function RequirementRows({ requirements, onSelect, compact = false }: { requirem
   </button>)}</div>;
 }
 
-function RequirementEditor({ requirement, onClose, onSave }: { requirement: Requirement; onClose: () => void; onSave: (updates: Partial<Requirement>) => void }) {
+function RequirementEditor({ requirement, onClose, onSave, onDelete }: { requirement: Requirement; onClose: () => void; onSave: (updates: Partial<Requirement>) => void; onDelete: () => void }) {
   const [title, setTitle] = useState(requirement.title);
   const [statement, setStatement] = useState(requirement.statement);
   const [type, setType] = useState(requirement.type);
@@ -451,8 +513,8 @@ function RequirementEditor({ requirement, onClose, onSave }: { requirement: Requ
   const submitForReview = () => { if (!title.trim() || !statement.trim() || !window.confirm('Submit this draft for review?')) return; onSave({ ...editedFields(), status: 'Under review' }); onClose(); };
   const approve = () => { if (!title.trim() || !statement.trim() || !window.confirm('Approve this requirement into the project baseline?')) return; onSave({ ...editedFields(), status: 'Approved', reviewedAt: new Date().toISOString() }); onClose(); };
   const reject = () => { if (!window.confirm('Reject this requirement? The source and draft will remain in the project record.')) return; onSave({ status: 'Rejected', reviewedAt: new Date().toISOString() }); onClose(); };
-  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="editor-drawer">
-    <div className="drawer-header"><div><span className="requirement-id">{requirement.code}</span><h2>{requirement.status === 'Approved' ? 'Approved requirement' : requirement.status === 'Rejected' ? 'Rejected requirement' : 'Review requirement'}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button></div>
+  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="editor-drawer" role="dialog" aria-modal="true" aria-labelledby="requirement-editor-title">
+    <div className="drawer-header"><div><span className="requirement-id">{requirement.code}</span><h2 id="requirement-editor-title">{requirement.status === 'Approved' ? 'Approved requirement' : requirement.status === 'Rejected' ? 'Rejected requirement' : 'Review requirement'}</h2></div><div className="drawer-header-actions"><button className="icon-button danger-icon" onClick={() => { if (window.confirm(`Delete ${requirement.code}? It will be removed from active lists while its audit history is retained.`)) onDelete(); }} aria-label={`Delete ${requirement.code}`} title="Delete requirement"><Trash2 size={16} /></button><button className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button></div></div>
     <div className="drawer-source"><span className="source-chip">{requirement.sourceType}</span><span>{requirement.sourceReference}</span><small>Captured {dateLabel(requirement.createdAt)}</small></div>
     <div className="drawer-content"><div className="info-note"><BookOpen size={15} /><span>Original source wording is retained below. {locked ? 'Approved and rejected records are read-only in this phase.' : 'Edit the draft to clarify it before submitting for approval.'}</span></div>
       <label>Title<input disabled={locked} value={title} onChange={(event) => { setTitle(event.target.value); setSaved(false); }} /></label>
@@ -470,6 +532,108 @@ function RequirementEditor({ requirement, onClose, onSave }: { requirement: Requ
 
 function ProjectSettings({ project }: { project: Project }) {
   return <div className="narrow-page"><div className="eyebrow">PROJECT</div><h1 className="page-heading">Project settings</h1><p className="page-subheading">The project space currently active in this browser.</p><section className="surface settings-card"><div className="settings-icon"><FolderKanban size={18} /></div><div className="settings-line"><span>Name</span><b>{project.name}</b></div><div className="settings-line"><span>Project key</span><b className="mono">{project.key}</b></div><div className="settings-line"><span>Description</span><b>{project.description || 'No description provided'}</b></div><div className="settings-line"><span>Created</span><b>{dateLabel(project.createdAt)}</b></div><div className="settings-line"><span>Storage</span><b><span className="local-dot" /> Browser cache + local API</b></div><div className="settings-note"><CircleHelp size={15} /> The local API persists records in the configured database. Shared team sync and user accounts are not connected yet.</div></section></div>;
+}
+
+function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
+  project: Project;
+  requirements: Requirement[];
+  createLink: WorkspaceProps['createRequirementLink'];
+  deleteLink: WorkspaceProps['deleteRequirementLink'];
+}) {
+  const [snapshot, setSnapshot] = useState<TraceabilitySnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [targetId, setTargetId] = useState('');
+  const [relationshipType, setRelationshipType] = useState<'depends_on' | 'relates_to' | 'conflicts_with'>('depends_on');
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      setSnapshot(await getTraceability(project.id));
+      setError('');
+    } catch {
+      setError('Traceability links are unavailable until the local API reconnects. Your current requirements remain available.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, [project.id]);
+  useEffect(() => {
+    if (!requirements.some((item) => item.id === sourceId)) setSourceId(requirements[0]?.id ?? '');
+    if (!requirements.some((item) => item.id === targetId) || targetId === sourceId) {
+      setTargetId(requirements.find((item) => item.id !== sourceId)?.id ?? '');
+    }
+  }, [requirements, sourceId, targetId]);
+
+  const displayedRequirements = snapshot?.requirements ?? requirements;
+  const links = snapshot?.links ?? [];
+  const requirementById = new Map(displayedRequirements.map((item) => [item.id, item]));
+  const orphanIds = new Set(snapshot?.orphanRequirementIds ?? []);
+
+  const submitLink = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setBusy(true);
+    const result = await createLink(sourceId, targetId, relationshipType);
+    if (result.online) await refresh();
+    else setError(result.error ?? 'The relationship is queued until the API reconnects.');
+    setBusy(false);
+  };
+
+  const removeLink = async (source: string, id: string) => {
+    if (!window.confirm('Remove this relationship? The change will be recorded in project history.')) return;
+    setBusy(true);
+    const result = await deleteLink(source, id);
+    if (result.online) await refresh();
+    else setError(result.error ?? 'The relationship removal is queued until the API reconnects.');
+    setBusy(false);
+  };
+
+  return <div className="traceability-page">
+    <div className="welcome-row"><div><div className="eyebrow">PROJECT LINKS · {project.key}</div><h1 className="page-heading">Traceability</h1><p className="page-subheading">Connect related requirements and find records that have no relationship. This view does not represent test coverage.</p></div></div>
+    {error && <div className="sync-alert trace-error" role="status"><span><b>Traceability data unavailable</b>{error}</span></div>}
+    <div className="metric-grid trace-metrics">
+      <Metric label="Requirements" value={displayedRequirements.length} icon={<FileText size={16} />} note="Active records in this project" />
+      <Metric label="Relationships" value={links.length} icon={<Network size={16} />} note="Persisted requirement-to-requirement links" />
+      <Metric label="Linked requirements" value={snapshot ? displayedRequirements.length - snapshot.orphanRequirementIds.length : 0} icon={<CheckCircle2 size={16} />} note={snapshot ? `${snapshot.linkedPercent}% have at least one relationship` : 'Connect to the local API to calculate'} />
+    </div>
+    <section className="surface trace-form-surface">
+      <div className="section-heading"><div><span className="eyebrow">ADD A RELATIONSHIP</span><h2>Link two requirements</h2></div></div>
+      {requirements.length < 2 ? <EmptyState icon={<Network size={18} />} title="Add another requirement first" text="A traceability relationship connects two records in the same project." /> : <form className="trace-link-form" onSubmit={submitLink}>
+        <label>Source requirement<select value={sourceId} onChange={(event) => { setSourceId(event.target.value); if (event.target.value === targetId) setTargetId(requirements.find((item) => item.id !== event.target.value)?.id ?? ''); }}><option value="" disabled>Select a source</option>{requirements.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.title}</option>)}</select></label>
+        <label>Relationship<select value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as typeof relationshipType)}><option value="depends_on">Depends on</option><option value="relates_to">Relates to</option><option value="conflicts_with">Conflicts with</option></select></label>
+        <label>Target requirement<select value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="" disabled>Select a target</option>{requirements.filter((item) => item.id !== sourceId).map((item) => <option key={item.id} value={item.id}>{item.code} · {item.title}</option>)}</select></label>
+        <button className="button button-primary" type="submit" disabled={busy || !sourceId || !targetId}><Plus size={15} /> Add link</button>
+      </form>}
+    </section>
+    <section className="surface trace-matrix-surface">
+      <div className="section-heading"><div><span className="eyebrow">REQUIREMENT MATRIX</span><h2>Related records</h2></div><span className="phase-pill">{loading ? 'Loading' : `${links.length} links`}</span></div>
+      {displayedRequirements.length === 0 ? <EmptyState icon={<BookOpen size={18} />} title="No requirements in this project" text="Capture requirements first to begin linking their scope." /> : <div className="trace-table-wrap"><table className="trace-table"><thead><tr><th>Requirement</th><th>Status</th><th>Relationships</th><th>Link state</th></tr></thead><tbody>{displayedRequirements.map((item) => {
+        const related = links.filter((link) => link.sourceRequirementId === item.id || link.targetRequirementId === item.id);
+        return <tr key={item.id}><td><span className="requirement-id">{item.code}</span><b>{item.title}</b></td><td><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></td><td>{related.length ? <div className="trace-related-list">{related.map((link) => {
+          const otherId = link.sourceRequirementId === item.id ? link.targetRequirementId : link.sourceRequirementId;
+          const other = requirementById.get(otherId);
+          return <span className="trace-related-item" key={link.id}><span>{link.relationshipType.replaceAll('_', ' ')}</span><b>{other?.code ?? 'Unavailable record'}</b>{link.sourceRequirementId === item.id && <button className="icon-button danger-icon" aria-label={`Remove relationship to ${other?.code ?? otherId}`} title="Remove relationship" disabled={busy} onClick={() => void removeLink(item.id, link.id)}><X size={13} /></button>}</span>;
+        })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{snapshot ? orphanIds.has(item.id) ? <span className="trace-state orphan">Unlinked</span> : <span className="trace-state linked">Linked</span> : <span className="trace-state unknown">Unavailable</span>}</td></tr>;
+      })}</tbody></table></div>}
+    </section>
+  </div>;
+}
+
+function NotFoundPage() {
+  const navigate = useNavigate();
+  return <div className="narrow-page not-found-page">
+    <div className="eyebrow">404 · PAGE NOT FOUND</div>
+    <h1 className="page-heading">This route does not exist</h1>
+    <p className="page-subheading">The address may be outdated. Return to the project overview or open the requirements list.</p>
+    <div className="not-found-actions">
+      <button className="button button-primary" onClick={() => navigate('/')}>Go to overview<ArrowRight size={15} /></button>
+      <button className="button button-secondary" onClick={() => navigate('/requirements')}>Browse requirements</button>
+    </div>
+  </div>;
 }
 
 function EmptyState({ icon, title, text, action, onAction }: { icon: ReactNode; title: string; text: string; action?: string; onAction?: () => void }) {

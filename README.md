@@ -27,3 +27,14 @@ the bundled local database stays in the user's Windows application data folder.
 
 The product scope and delivery sequence are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
+The latest source review is recorded in [AUDIT_REPORT.md](AUDIT_REPORT.md).
+Run backend checks from `backend`:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+
+The packaged sidecar smoke check runs when `desktop:build` has generated the
+Windows sidecar.
