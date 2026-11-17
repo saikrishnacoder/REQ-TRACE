@@ -559,6 +559,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .github-repo-list small { margin-left: auto; }
 .github-linked-list a { display: inline-flex; gap: 4px; align-items: center; }
 .report-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 18px 20px; }
+.requirements-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.requirements-actions input[type="file"] { display: none; }
+.requirements-actions label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
 .report-toolbar label { min-width: min(380px, 100%); }
 .report-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-preview { margin-top: 16px; overflow: hidden; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -106,6 +106,7 @@ function App() {
   const [backendDatabase, setBackendDatabase] = useState<DatabaseKind>(null);
   const [pendingCount, setPendingCount] = useState(() => pendingWriteCount());
   const [syncError, setSyncError] = useState<string | null>(null);
+  const nextRequirementNumbers = useRef<Record<string, number>>({});
   const currentProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
 
   useEffect(() => localStorage.setItem(STORAGE.projects, JSON.stringify(projects)), [projects]);
@@ -149,7 +150,9 @@ function App() {
 
   const createRequirement = (record: Omit<Requirement, 'id' | 'code' | 'projectId' | 'createdAt' | 'status'>) => {
     if (!currentProject) return;
-    const nextNumber = requirements.filter((item) => item.projectId === currentProject.id).length + 1;
+    const knownNumbers = requirements.filter((item) => item.projectId === currentProject.id).map((item) => Number(item.code.match(/-(\d+)$/)?.[1] ?? 0));
+    const nextNumber = Math.max(nextRequirementNumbers.current[currentProject.id] ?? 0, ...knownNumbers) + 1;
+    nextRequirementNumbers.current[currentProject.id] = nextNumber;
     const created: Requirement = {
       ...record,
       id: makeId(),
@@ -302,7 +305,7 @@ function Workspace(props: WorkspaceProps) {
         <div className="page-content">
           <Routes>
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} projectCount={props.projects.length} />} />
-            <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
+            <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} createRequirement={props.createRequirement} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
             <Route path="/github" element={<GitHubPage project={props.project} requirements={props.requirements} />} />
@@ -479,7 +482,25 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
   </div>;
 }
 
-function RequirementsPage({ requirements, updateRequirement, deleteRequirement }: { requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement']; deleteRequirement: WorkspaceProps['deleteRequirement'] }) {
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = []; let row: string[] = []; let cell = ''; let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"' && text[i + 1] === '"') { cell += '"'; i += 1; }
+      else if (char === '"') quoted = false;
+      else cell += char;
+    } else if (char === '"' && cell.length === 0) quoted = true;
+    else if (char === ',') { row.push(cell); cell = ''; }
+    else if (char === '\n') { row.push(cell.replace(/\r$/, '')); rows.push(row); row = []; cell = ''; }
+    else cell += char;
+  }
+  if (quoted) throw new Error('Unclosed quoted CSV field.');
+  if (cell.length || row.length) { row.push(cell.replace(/\r$/, '')); rows.push(row); }
+  return rows;
+}
+
+function RequirementsPage({ requirements, updateRequirement, deleteRequirement, createRequirement }: { requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement']; deleteRequirement: WorkspaceProps['deleteRequirement']; createRequirement: WorkspaceProps['createRequirement'] }) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<'All' | RequirementStatus>('All');
   const [priority, setPriority] = useState<'All' | Priority>('All');
@@ -487,6 +508,7 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement }
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState('');
   const visible = useMemo(() => {
     const priorityOrder: Record<Priority, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
     return requirements
@@ -506,8 +528,8 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement }
   const selected = requirements.find((item) => item.id === selectedId);
   const exportCsv = () => {
     const columns: (keyof Requirement)[] = ['code', 'title', 'statement', 'type', 'priority', 'status', 'actor', 'preconditions', 'sourceType', 'sourceReference', 'createdAt'];
-    const escapeCsv = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
-    const content = [columns.map(escapeCsv).join(','), ...visible.map((record) => columns.map((column) => escapeCsv(record[column])).join(','))].join('\r\n');
+    const escapeCsv = (value: unknown) => { const raw = String(value ?? ''); const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw; return `"${safe.replaceAll('"', '""')}"`; };
+    const content = `\uFEFF${[columns.map(escapeCsv).join(','), ...visible.map((record) => columns.map((column) => escapeCsv(record[column])).join(','))].join('\r\n')}`;
     const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
@@ -515,8 +537,38 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement }
     link.click();
     URL.revokeObjectURL(url);
   };
+  const importCsv = async (file: File) => {
+    setImportSummary('');
+    try {
+      const matrix = parseCsv(await file.text());
+      if (matrix.length < 2) { setImportSummary('The CSV has a header row but no requirement rows.'); return; }
+      const headers = matrix[0].map((value) => value.trim().toLowerCase().replaceAll(/[ _-]/g, ''));
+      const index = (key: string) => headers.indexOf(key);
+      if (index('title') < 0 || index('statement') < 0) { setImportSummary('CSV needs title and statement columns.'); return; }
+      let imported = 0; const skipped: number[] = [];
+      for (let rowIndex = 1; rowIndex < matrix.length; rowIndex += 1) {
+        const row = matrix[rowIndex];
+        if (!row.some((value) => value.trim())) continue;
+        const value = (key: string, fallback = '') => { const i = index(key); return i >= 0 ? (row[i] ?? '').trim() : fallback; };
+        const title = value('title'); const statement = value('statement');
+        const rawType = value('type', 'Functional');
+        const matchedType = TYPES.find((item) => item.toLowerCase() === rawType.toLowerCase()) ?? (rawType.toLowerCase() === 'nonfunctional' ? 'Non-functional' : undefined);
+        const rawPriority = value('priority', 'Medium');
+        const matchedPriority = PRIORITIES.find((item) => item.toLowerCase() === rawPriority.toLowerCase());
+        if (!title || !statement || !matchedType || !matchedPriority) { skipped.push(rowIndex + 1); continue; }
+        createRequirement({ title, statement, type: matchedType, priority: matchedPriority,
+          actor: value('actor'), preconditions: value('preconditions'),
+          acceptanceCriteria: value('acceptancecriteria').split(/[|;]/).map((item) => item.trim()).filter(Boolean),
+          sourceType: 'Document', sourceReference: `${file.name} · row ${rowIndex + 1}`,
+          originalText: value('originaltext', statement) || statement });
+        imported += 1;
+      }
+      setImportSummary(`Imported ${imported} requirement${imported === 1 ? '' : 's'}${skipped.length ? `; skipped invalid row${skipped.length === 1 ? '' : 's'}: ${skipped.join(', ')}` : ''}.`);
+    } catch { setImportSummary('Could not read this CSV. Save it as UTF-8 CSV and try again.'); }
+  };
   return <>
-    <div className="welcome-row"><div><div className="eyebrow">PROJECT RECORDS</div><h1 className="page-heading">Requirements</h1><p className="page-subheading">Review source-backed drafts before they enter the approved baseline.</p></div><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div>
+    <div className="welcome-row"><div><div className="eyebrow">PROJECT RECORDS</div><h1 className="page-heading">Requirements</h1><p className="page-subheading">Review source-backed drafts before they enter the approved baseline.</p></div><div className="requirements-actions"><label className="button button-secondary"><Upload size={15} />Import CSV<input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importCsv(file); event.currentTarget.value = ''; }} /></label><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div></div>
+    {importSummary && <div className="sync-alert" role="status">{importSummary}</div>}
     <section className="surface records-surface">
       <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'Rejected'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => { setFilter(status); setPage(1); }}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search records" /></label><select aria-label="Filter by priority" value={priority} onChange={(event) => { setPriority(event.target.value as 'All' | Priority); setPage(1); }}><option value="All">All priorities</option>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort requirements" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Priority</option></select><button className="button button-secondary button-small" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div></div>
       {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}

@@ -146,3 +146,8 @@ history and supports comments. Both changes generate audit and sync-outbox
 records. Initial history and comment endpoints are covered by API tests.
 All 16 backend tests and TypeScript checks pass, and the refreshed 28.87 MiB
 installer passed the packaged-sidecar migration/health smoke test.
+
+The requirement list now imports validated UTF-8 CSV rows through the existing
+persisted create path, reports invalid row numbers, and exports with formula
+neutralization. Type and priority values are checked before creating records.
+Excel import and bulk edit remain planned.
