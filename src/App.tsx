@@ -8,8 +8,8 @@ import {
   Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getDefects, getProjectAudit, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, updateDefect } from './services/persistence';
-import type { AuditRecord, DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getConversationMessages, getConversations, getDefects, getProjectAudit, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, sendAssistantMessage, updateDefect } from './services/persistence';
+import type { AuditRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -242,7 +242,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -270,6 +270,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
           <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
+          <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
@@ -298,6 +299,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} projectCount={props.projects.length} />} />
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
+            <Route path="/assistant" element={<AssistantPage project={props.project} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
@@ -644,6 +646,25 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
         })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{snapshot ? orphanIds.has(item.id) ? <span className="trace-state orphan">Unlinked</span> : <span className="trace-state linked">Linked</span> : <span className="trace-state unknown">Unavailable</span>}</td></tr>;
       })}</tbody></table></div>}
     </section>
+  </div>;
+}
+
+function AssistantPage({ project }: { project: Project }) {
+  const [conversations, setConversations] = useState<ConversationRecord[]>([]);
+  const [activeId, setActiveId] = useState('');
+  const [messages, setMessages] = useState<ConversationMessageRecord[]>([]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const refreshConversations = async () => { try { const items = await getConversations(project.id); setConversations(items); if (!items.some((item) => item.id === activeId) && items[0]) { setActiveId(items[0].id); setMessages(await getConversationMessages(items[0].id)); } else if (!items.length) { setActiveId(''); setMessages([]); } } catch { setError('Assistant history requires the local API.'); } };
+  useEffect(() => { void refreshConversations(); }, [project.id]);
+  const selectConversation = async (id: string) => { setActiveId(id); try { setMessages(await getConversationMessages(id)); setError(''); } catch { setError('Could not load this conversation.'); } };
+  const send = async (event: FormEvent) => { event.preventDefault(); const content = draft.trim(); if (!content || busy) return; setBusy(true); setError(''); try { const reply = await sendAssistantMessage(project.id, content, activeId || undefined); setConversations((items) => [reply.conversation, ...items.filter((x) => x.id !== reply.conversation.id)]); setActiveId(reply.conversation.id); setMessages((items) => [...items, reply.userMessage, reply.assistantMessage]); setDraft(''); } catch (e) { setError(e instanceof Error ? e.message : 'Message could not be sent.'); } finally { setBusy(false); } };
+  return <div className="assistant-page"><div className="eyebrow"><MessageSquareText size={13} /> GROUNDED PROJECT Q&A · {project.key}</div><h1 className="page-heading">AI assistant</h1><p className="page-subheading">Ask about stored requirements, test cases, and defects. Answers include database record sources.</p>
+    <div className="ai-disclosure"><ShieldCheck size={16} /><span>Project records are retrieved by the local API. If an AI provider is configured, retrieved context is sent to that server-side provider. Otherwise, answers use local search only and will not infer facts.</span></div>
+    {error && <div className="sync-alert" role="status">{error}</div>}
+    <div className="assistant-layout"><aside className="surface assistant-conversations"><div className="section-heading"><div><span className="eyebrow">HISTORY</span><h2>Conversations</h2></div><button className="button button-secondary button-small" onClick={() => { setActiveId(''); setMessages([]); setError(''); }}>New</button></div>{conversations.map((item) => <button className={`ai-requirement-row${activeId === item.id ? ' active' : ''}`} key={item.id} onClick={() => void selectConversation(item.id)}><b>{item.title}</b><small>{dateLabel(item.updatedAt)}</small></button>)}</aside>
+      <section className="surface assistant-thread"><div className="assistant-messages">{messages.length === 0 ? <EmptyState icon={<MessageSquareText size={18} />} title="Ask about this project" text="Try “Which requirements have test cases?” or “Summarize the open defects.”" /> : messages.map((message) => <article className={`assistant-message ${message.role}`} key={message.id}><b>{message.role === 'user' ? 'You' : `ReqTrace · ${message.provider}`}</b><p>{message.content}</p>{message.sources.length > 0 && <div className="assistant-sources"><span>Sources</span>{message.sources.map((source) => <Link key={source.id} to={source.path}>{source.code} · {source.title}</Link>)}</div>}</article>)}</div><form className="assistant-composer" onSubmit={send}><textarea rows={3} maxLength={10000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask a question grounded in this project…" /><div><small>Answers are based on stored project records and may include recommendations when an AI provider is configured.</small><button className="button button-primary" disabled={busy || !draft.trim()} type="submit">{busy ? 'Thinking…' : 'Send'}<ArrowRight size={14} /></button></div></form></section></div>
   </div>;
 }
 

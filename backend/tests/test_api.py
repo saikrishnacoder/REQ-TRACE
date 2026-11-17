@@ -238,3 +238,36 @@ def test_requirement_analysis_uses_labeled_local_fallback_and_persists_history(c
     history = client.get(f"/api/v1/requirements/{requirement['id']}/analyses")
     assert history.status_code == 200
     assert len(history.json()) == 1
+
+
+def test_assistant_returns_grounded_records_and_persists_conversation(client: TestClient, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_api_key", "")
+    project = client.post("/api/v1/projects", json={"name": "Assistant", "key": "AST"}).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Card payment", "statement": "The buyer can pay with a valid card.", "type": "Functional",
+        "priority": "High", "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Card payment",
+    }).json()
+    response = client.post(f"/api/v1/projects/{project['id']}/assistant/messages", json={"message": "Summarize card payment"})
+    assert response.status_code == 201
+    reply = response.json()
+    assert reply["assistantMessage"]["provider"] == "local-search-fallback"
+    assert requirement["code"] in reply["assistantMessage"]["content"]
+    assert reply["assistantMessage"]["sources"][0]["id"] == requirement["id"]
+    conversation_id = reply["conversation"]["id"]
+    assert len(client.get(f"/api/v1/conversations/{conversation_id}/messages").json()) == 2
+    assert len(client.get(f"/api/v1/projects/{project['id']}/conversations").json()) == 1
+
+
+def test_assistant_rejects_conversation_from_another_project(client: TestClient, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_api_key", "")
+    first = client.post("/api/v1/projects", json={"name": "First", "key": "FST"}).json()
+    second = client.post("/api/v1/projects", json={"name": "Second", "key": "SND"}).json()
+    conversation = client.post(f"/api/v1/projects/{first['id']}/assistant/messages", json={"message": "hello"}).json()["conversation"]
+    response = client.post(f"/api/v1/projects/{second['id']}/assistant/messages", json={
+        "conversationId": conversation["id"], "message": "cross project access",
+    })
+    assert response.status_code == 404

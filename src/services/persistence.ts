@@ -202,3 +202,9 @@ export const getTestExecutions = (projectId: string) => request<TestExecutionRec
 export const createTestExecution = (testCaseId: string, status: TestExecutionRecord['status'], actualResult: string) => request<TestExecutionRecord>(`/test-cases/${testCaseId}/executions`, { method: 'POST', body: JSON.stringify({ status, actualResult }) });
 export interface AuditRecord { id: string; projectId: string; requirementId: string | null; action: string; detail: string; createdAt: string }
 export const getProjectAudit = (projectId: string) => request<AuditRecord[]>(`/projects/${projectId}/audit`);
+export interface ConversationRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string }
+export interface ConversationMessageRecord { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; sources: { type: string; id: string; code: string; title: string; path: string }[]; provider: string; createdAt: string }
+export interface AssistantReplyRecord { conversation: ConversationRecord; userMessage: ConversationMessageRecord; assistantMessage: ConversationMessageRecord }
+export const getConversations = (projectId: string) => request<ConversationRecord[]>(`/projects/${projectId}/conversations`);
+export const getConversationMessages = (id: string) => request<ConversationMessageRecord[]>(`/conversations/${id}/messages`);
+export const sendAssistantMessage = (projectId: string, message: string, conversationId?: string) => request<AssistantReplyRecord>(`/projects/${projectId}/assistant/messages`, { method: 'POST', body: JSON.stringify({ conversationId, message }) });

@@ -93,3 +93,14 @@ and audit activity from the local API, and refreshes on demand. Requirement
 counts and status distribution use the active project records. API-dependent
 metrics use an explicit unavailable state while offline. Date filters, trend
 visualizations, and report export remain planned.
+
+## Grounded assistant slice (2026-11-17)
+
+Revision `20261117_0007` adds project-scoped conversation/message tables. The
+assistant retrieves matching requirements, test cases, and defects, returns
+record citations, and stores both sides of the conversation. It uses the
+configured server-side AI provider when available and an explicitly labeled
+local-search response otherwise. Cross-project conversation access is
+rejected. Streaming, regenerate, and richer semantic retrieval remain future
+work. TypeScript and all 14 backend tests pass; the refreshed installer and
+packaged-sidecar smoke test pass (28.85 MiB installer).

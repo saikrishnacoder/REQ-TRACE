@@ -168,3 +168,26 @@ class TestExecution(Base):
     status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False)
     actual_result: Mapped[str] = mapped_column("ACTUAL_RESULT", Text, nullable=False)
     executed_at: Mapped[datetime] = mapped_column("EXECUTED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class Conversation(Base):
+    __tablename__ = "RT_CONVERSATIONS"
+
+    id: Mapped[str] = mapped_column("CONVERSATION_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column("TITLE", String(300), nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class ConversationMessage(Base):
+    __tablename__ = "RT_CONVERSATION_MESSAGES"
+    __table_args__ = (Index("IX_RT_CHAT_CONV_TIME", "CONVERSATION_ID", "CREATED_AT"),)
+
+    id: Mapped[str] = mapped_column("MESSAGE_ID", String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column("CONVERSATION_ID", String(36), ForeignKey("RT_CONVERSATIONS.CONVERSATION_ID", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column("ROLE", String(12), nullable=False)
+    content: Mapped[str] = mapped_column("CONTENT", Text, nullable=False)
+    sources_json: Mapped[str] = mapped_column("SOURCES_JSON", Text, nullable=False, default="[]")
+    provider: Mapped[str] = mapped_column("PROVIDER", String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

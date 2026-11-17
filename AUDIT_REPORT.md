@@ -55,6 +55,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/tests` | Create/list cases, record actual results by run status, inspect execution history | Implemented for manual execution; test suites/assignment remain outstanding |
 | `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
 | `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
+| `/assistant` | Saved project conversations, retrieved-record answers, and source links | Implemented with local-search fallback; live provider path needs server-side key; streaming and regenerate remain open |
 | Any other path | Dedicated not-found view with navigation back into the app | Implemented |
 
 ## No UI-only features to misrepresent
@@ -120,3 +121,13 @@ Provider configuration is server-side (`AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`)
 and never returned to the client. Fallback persistence and output validation
 are covered by the backend suite; an external provider request has not been
 verified because no provider credential was supplied in this workspace.
+
+## Grounded assistant progress
+
+Alembic revision `20261117_0007` adds project conversations and message history.
+The `/assistant` route retrieves requirement, case, and defect records from the
+selected project, stores user/assistant messages, and returns source references
+with each answer. Without a configured provider, it uses local term matching and
+states that limitation. Conversation access is project-scoped. Fallback,
+history, source references, and cross-project rejection pass backend tests.
+External provider calls and streaming are not verified/implemented.

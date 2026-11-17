@@ -206,6 +206,39 @@ class TestExecutionRead(APIModel):
     executed_at: datetime
 
 
+class ConversationCreate(APIModel):
+    title: str = Field(default="New conversation", min_length=1, max_length=300)
+
+
+class AssistantMessageCreate(APIModel):
+    conversation_id: str | None = None
+    message: str = Field(min_length=1, max_length=10000)
+
+
+class ConversationRead(APIModel):
+    id: str
+    project_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationMessageRead(APIModel):
+    id: str
+    conversation_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    sources: list[dict[str, str]]
+    provider: str
+    created_at: datetime
+
+
+class AssistantReply(APIModel):
+    conversation: ConversationRead
+    user_message: ConversationMessageRead
+    assistant_message: ConversationMessageRead
+
+
 class AnalysisIssue(APIModel):
     category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
     explanation: str = Field(min_length=1, max_length=1000)
