@@ -200,3 +200,5 @@ export const getRequirementAnalyses = (id: string) => request<RequirementAnalysi
 export interface TestExecutionRecord { id: string; projectId: string; testCaseId: string; status: 'Passed' | 'Failed' | 'Blocked' | 'Skipped'; actualResult: string; executedAt: string }
 export const getTestExecutions = (projectId: string) => request<TestExecutionRecord[]>(`/projects/${projectId}/test-executions`);
 export const createTestExecution = (testCaseId: string, status: TestExecutionRecord['status'], actualResult: string) => request<TestExecutionRecord>(`/test-cases/${testCaseId}/executions`, { method: 'POST', body: JSON.stringify({ status, actualResult }) });
+export interface AuditRecord { id: string; projectId: string; requirementId: string | null; action: string; detail: string; createdAt: string }
+export const getProjectAudit = (projectId: string) => request<AuditRecord[]>(`/projects/${projectId}/audit`);

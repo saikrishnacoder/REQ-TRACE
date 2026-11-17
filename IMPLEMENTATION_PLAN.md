@@ -87,3 +87,9 @@ future sync. Test suite management, tester assignment, automated execution,
 and run evidence attachments remain outstanding. TypeScript and all 12 backend
 tests pass; the packaged Windows installer and sidecar smoke test pass for this
 revision (28.84 MiB installer).
+
+The overview now reads test-case coverage, recorded run pass rate, open defects,
+and audit activity from the local API, and refreshes on demand. Requirement
+counts and status distribution use the active project records. API-dependent
+metrics use an explicit unavailable state while offline. Date filters, trend
+visualizations, and report export remain planned.

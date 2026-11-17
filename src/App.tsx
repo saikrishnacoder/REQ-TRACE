@@ -8,8 +8,8 @@ import {
   Sparkles, Trash2, Upload, X
 } from 'lucide-react';
 import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
-import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getDefects, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, updateDefect } from './services/persistence';
-import type { DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import { analyzeRequirement, createDefect, createTestCase, createTestExecution, getDefects, getProjectAudit, getRequirementAnalyses, getTestCases, getTestExecutions, getTraceability, updateDefect } from './services/persistence';
+import type { AuditRecord, DefectRecord, RequirementAnalysisRecord, TestCaseRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -295,7 +295,7 @@ function Workspace(props: WorkspaceProps) {
         {props.syncError && <div className="sync-alert" role="status"><span><b>Storage needs attention</b>{props.syncError}</span><small>{props.pendingCount} pending change{props.pendingCount === 1 ? '' : 's'}</small></div>}
         <div className="page-content">
           <Routes>
-            <Route path="/" element={<Overview project={props.project} requirements={props.requirements} />} />
+            <Route path="/" element={<Overview project={props.project} requirements={props.requirements} projectCount={props.projects.length} />} />
             <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
@@ -348,12 +348,22 @@ function NewProjectForm({ onCreate, primaryLabel }: { onCreate: WorkspaceProps['
   </form>;
 }
 
-function Overview({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+function Overview({ project, requirements, projectCount }: { project: Project; requirements: Requirement[]; projectCount: number }) {
   const navigate = useNavigate();
+  const [dashboard, setDashboard] = useState<{ cases: TestCaseRecord[]; executions: TestExecutionRecord[]; defects: DefectRecord[]; audit: AuditRecord[] } | null>(null);
+  const [dashboardError, setDashboardError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshDashboard = async () => { setRefreshing(true); try { const [cases, executions, defects, audit] = await Promise.all([getTestCases(project.id), getTestExecutions(project.id), getDefects(project.id), getProjectAudit(project.id)]); setDashboard({ cases, executions, defects, audit }); setDashboardError(''); } catch { setDashboard(null); setDashboardError('Test, defect, and activity metrics are unavailable while the API is offline.'); } finally { setRefreshing(false); } };
+  useEffect(() => { void refreshDashboard(); }, [project.id]);
   const approved = requirements.filter((item) => item.status === 'Approved').length;
   const inReview = requirements.filter((item) => item.status === 'Under review').length;
   const drafts = requirements.filter((item) => item.status === 'Draft').length;
   const latest = requirements.slice(0, 5);
+  const openDefects = dashboard?.defects.filter((item) => !['Resolved', 'Closed'].includes(item.status)).length;
+  const testCovered = new Set((dashboard?.cases ?? []).map((item) => item.requirementId).filter(Boolean)).size;
+  const coverage = requirements.length && dashboard ? Math.round(testCovered * 100 / requirements.length) : 0;
+  const passRate = dashboard?.executions.length ? Math.round(dashboard.executions.filter((item) => item.status === 'Passed').length * 100 / dashboard.executions.length) : 0;
+  const statusBars = [{ label: 'Draft', count: drafts }, { label: 'In review', count: inReview }, { label: 'Approved', count: approved }, { label: 'Rejected', count: requirements.filter((item) => item.status === 'Rejected').length }];
   const steps = [
     { n: '01', title: 'Capture', detail: 'Chat, document, or manual entry', complete: requirements.length > 0 },
     { n: '02', title: 'Review', detail: 'Clarify and refine each draft', complete: inReview + approved > 0 },
@@ -362,11 +372,18 @@ function Overview({ project, requirements }: { project: Project; requirements: R
   return <>
     <div className="welcome-row"><div><div className="eyebrow">PROJECT OVERVIEW <span className="eyebrow-divider">·</span> {project.key}</div><h1 className="page-heading">{project.name}</h1><p className="page-subheading">Capture intent, keep its source, and move each requirement through human review.</p></div><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div>
 
-    <div className="metric-grid">
+    <div className="metric-grid dashboard-metrics">
+      <Metric label="Projects" value={projectCount} icon={<FolderKanban size={16} />} note="Available in this workspace" />
       <Metric label="Requirements" value={requirements.length} icon={<FileText size={16} />} note="Captured in this project" />
       <Metric label="Needs review" value={drafts + inReview} icon={<ClipboardCheck size={16} />} note={drafts ? `${drafts} draft${drafts === 1 ? '' : 's'} to prepare` : 'Nothing waiting for review'} />
       <Metric label="Approved baseline" value={approved} icon={<CheckCircle2 size={16} />} note="Approved by a project reviewer" />
+      <Metric label="Test cases" value={dashboard ? dashboard.cases.length : '—'} icon={<ListChecks size={16} />} note={dashboard ? 'Persisted manual cases' : 'API unavailable'} />
+      <Metric label="Run pass rate" value={dashboard ? `${passRate}%` : '—'} icon={<CheckCircle2 size={16} />} note={dashboard ? `${dashboard.executions.length} recorded executions` : 'API unavailable'} />
+      <Metric label="Open defects" value={dashboard ? openDefects ?? 0 : '—'} icon={<CircleHelp size={16} />} note={dashboard ? 'Excludes resolved and closed' : 'API unavailable'} />
+      <Metric label="Test coverage" value={dashboard ? `${coverage}%` : '—'} icon={<Network size={16} />} note={dashboard ? `${testCovered} of ${requirements.length} requirements linked to a case` : 'API unavailable'} />
     </div>
+
+    {dashboardError && <div className="sync-alert" role="status">{dashboardError}</div>}
 
     <div className="overview-grid">
       <section className="surface workflow-surface">
@@ -386,13 +403,14 @@ function Overview({ project, requirements }: { project: Project; requirements: R
     </div>
 
     <section className="surface recent-surface">
-      <div className="section-heading"><div><span className="eyebrow">PROJECT RECORDS</span><h2>Recent requirements</h2></div><button className="button button-secondary button-small" onClick={() => navigate('/requirements')}>View all<ArrowRight size={14} /></button></div>
+      <div className="section-heading"><div><span className="eyebrow">PROJECT RECORDS</span><h2>Recent requirements</h2></div><div><button className="button button-secondary button-small" disabled={refreshing} onClick={() => void refreshDashboard()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button> <button className="button button-secondary button-small" onClick={() => navigate('/requirements')}>View all<ArrowRight size={14} /></button></div></div>
       {latest.length ? <RequirementRows requirements={latest} compact /> : <EmptyState icon={<BookOpen size={18} />} title="No requirements yet" text="Your project starts with a source and a draft for review." action="Add your first requirement" onAction={() => navigate('/intake')} />}
     </section>
+    <div className="overview-grid dashboard-lower"><section className="surface recent-surface"><div className="section-heading"><div><span className="eyebrow">REQUIREMENT HEALTH</span><h2>Status distribution</h2></div></div>{statusBars.map((item) => <div className="dashboard-bar-row" key={item.label}><span>{item.label}</span><div className="dashboard-bar-track"><span style={{ width: `${requirements.length ? item.count * 100 / requirements.length : 0}%` }} /></div><b>{item.count}</b></div>)}</section><section className="surface recent-surface"><div className="section-heading"><div><span className="eyebrow">AUDIT LOG</span><h2>Recent activity</h2></div></div>{dashboard?.audit.slice(0, 6).length ? dashboard.audit.slice(0, 6).map((event) => <div className="activity-row" key={event.id}><span className="local-dot" /><div><b>{event.action.replaceAll('_', ' ')}</b><small>{dateLabel(event.createdAt)}{event.requirementId ? ` · ${requirements.find((r) => r.id === event.requirementId)?.code ?? 'Requirement'}` : ''}</small></div></div>) : <EmptyState icon={<Inbox size={18} />} title="No activity recorded" text={dashboard ? 'Project audit events will appear here.' : 'Activity is unavailable offline.'} />}</section></div>
   </>;
 }
 
-function Metric({ label, value, icon, note }: { label: string; value: number; icon: ReactNode; note: string }) {
+function Metric({ label, value, icon, note }: { label: string; value: number | string; icon: ReactNode; note: string }) {
   return <div className="metric-card"><div className="metric-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><strong>{value}</strong><small>{note}</small></div>;
 }
 
