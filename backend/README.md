@@ -56,11 +56,32 @@ Set `GITHUB_TOKEN` for manual read-only repository sync. The token remains
 server-side. Imports currently cap each category at the first 100 records;
 OAuth, webhooks, and automated synchronization are not implemented.
 
-## Security and deployment
+## Authentication and deployment
 
-The packaged desktop sidecar binds to loopback. **Authentication, role-based
-authorization, rate limiting, and shared-team sync are not implemented. Do not
-bind this API to a public or shared network, and do not expose Oracle mode as a
-team service.** Keep `.env` out of source control and use a secret manager for
-any future deployment. The current app has no file-upload endpoint; document
+Local mode is unauthenticated by default and is intended for the loopback
+desktop sidecar. Oracle mode enables bearer authentication by default. Set
+`AUTH_TOKEN_SECRET` to a random secret of at least 32 characters. For the first
+server start, also set `AUTH_BOOTSTRAP_EMAIL` and a unique
+`AUTH_BOOTSTRAP_PASSWORD` of at least 12 characters; startup creates one Admin
+account if the user table is empty. Bootstrap credentials are ignored after
+that first account exists. Roles currently provide broad API guards: Viewer is
+read-only; Editor can create/update; Admin can also delete. Tokens expire after
+60 minutes by default and are held in browser session storage.
+
+Admins can list accounts, create users with one of the three roles, and
+deactivate accounts via `/api/v1/auth/users`. The login endpoint permits five
+attempts per five-minute in-process window; other authenticated API traffic is
+limited to 300 requests/minute per process. These in-memory limits do not
+coordinate across multiple workers or instances.
+
+This remains an initial authentication foundation, not a complete shared-
+service security boundary. Project membership/isolation, password reset,
+immediate token revocation, distributed rate limiting, CSRF controls, and
+deployment hardening remain incomplete. **Do not bind the API to a public or
+shared network.** Keep `.env` out of source control and use a secret manager
+for any future deployment. The app has no file-upload endpoint; document
 intake records a reference and user-entered text only.
+
+The browser does not automatically upload its local cached projects or older
+queued writes when it connects to Oracle. Those records remain on the device;
+an explicit, conflict-aware import/sync workflow is not implemented.

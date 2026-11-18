@@ -4,10 +4,10 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate }
 import {
   ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Github, Inbox, Layers3,
-  ListChecks, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
+  ListChecks, LogOut, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
   Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
-import { connectBackend, pendingWriteCount, queueWrite } from './services/persistence';
+import { connectBackend, hasAuthSession, login, logout, pendingWriteCount, queueWrite } from './services/persistence';
 import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, generateTestCaseSuggestions, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
 import type { AuditRecord, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
 
@@ -106,8 +106,15 @@ function App() {
   const [backendDatabase, setBackendDatabase] = useState<DatabaseKind>(null);
   const [pendingCount, setPendingCount] = useState(() => pendingWriteCount());
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [authRequired, setAuthRequired] = useState(false);
   const nextRequirementNumbers = useRef<Record<string, number>>({});
   const currentProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
+
+  useEffect(() => {
+    const requireLogin = () => setAuthRequired(true);
+    window.addEventListener('reqtrace:auth-required', requireLogin);
+    return () => window.removeEventListener('reqtrace:auth-required', requireLogin);
+  }, []);
 
   useEffect(() => localStorage.setItem(STORAGE.projects, JSON.stringify(projects)), [projects]);
   useEffect(() => localStorage.setItem(STORAGE.requirements, JSON.stringify(requirements)), [requirements]);
@@ -196,7 +203,7 @@ function App() {
 
   return (
     <BrowserRouter>
-      {!currentProject ? (
+      {authRequired ? <AuthenticationGate onSuccess={() => { setAuthRequired(false); window.dispatchEvent(new Event('online')); }} onLogout={logout} /> : !currentProject ? (
         <ProjectWelcome onCreate={createProject} />
       ) : (
         <Workspace
@@ -218,6 +225,27 @@ function App() {
       )}
     </BrowserRouter>
   );
+}
+
+function AuthenticationGate({ onSuccess, onLogout }: { onSuccess: () => void; onLogout: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try { await login(email, password); onSuccess(); }
+    catch (e) { onLogout(); setError(e instanceof Error ? e.message : 'Sign-in failed. Check the server and credentials.'); }
+    finally { setBusy(false); }
+  };
+  return <div className="welcome-screen"><section className="welcome-card auth-card">
+    <div className="brand-lockup welcome-brand"><span className="brand-mark"><GitBranch size={19} /></span><span className="brand-name">reqtrace<span className="brand-period">.</span></span></div>
+    <div className="eyebrow"><ShieldCheck size={13} /> AUTHENTICATED WORKSPACE</div><h1>Sign in to ReqTrace</h1>
+    <p>Your server administrator provides the account for this workspace.</p>
+    <form className="auth-form" onSubmit={submit}><label>Email<input type="email" autoComplete="username" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete="current-password" required maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error && <div className="sync-alert" role="alert">{error}</div>}<button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}<ArrowRight size={14} /></button></form>
+    <div className="welcome-foot"><ShieldCheck size={14} /> Session token stays in this browser tab and expires automatically.</div>
+  </section></div>;
 }
 
 interface WorkspaceProps {
@@ -300,7 +328,7 @@ function Workspace(props: WorkspaceProps) {
       <main className="main-panel">
         <header className="topbar">
           <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-slash">/</span><b>{pageTitle}</b></div>
-          <div className="topbar-right"><span className="local-badge"><span className="local-dot" />{props.backendState === 'checking' ? 'Checking storage' : props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database' : 'Local database' : props.pendingCount ? `Browser cache · ${props.pendingCount} pending` : 'Browser cache'}</span><button className="avatar-button" title="Local workspace">{props.project.key.slice(0, 1)}</button></div>
+          <div className="topbar-right"><span className="local-badge"><span className="local-dot" />{props.backendState === 'checking' ? 'Checking storage' : props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database' : 'Local database' : props.pendingCount ? `Browser cache · ${props.pendingCount} pending` : 'Browser cache'}</span>{hasAuthSession() ? <button className="avatar-button auth-signout" title="Sign out" aria-label="Sign out" onClick={() => { logout(); window.dispatchEvent(new Event('reqtrace:auth-required')); }}><LogOut size={15} /></button> : <button className="avatar-button" title="Local workspace">{props.project.key.slice(0, 1)}</button>}</div>
         </header>
         {props.syncError && <div className="sync-alert" role="status"><span><b>Storage needs attention</b>{props.syncError}</span><small>{props.pendingCount} pending change{props.pendingCount === 1 ? '' : 's'}</small></div>}
         <div className="page-content">

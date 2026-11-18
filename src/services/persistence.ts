@@ -59,8 +59,20 @@ interface PendingWrite {
 }
 
 const OUTBOX_KEY = 'reqtrace.outbox.v1';
+const SESSION_TOKEN_KEY = 'reqtrace.auth.session.v1';
 const API_BASE = (import.meta.env.VITE_API_URL || (isTauri() ? 'http://127.0.0.1:8000/api/v1' : '/api/v1')).replace(/\/$/, '');
 type DatabaseKind = 'sqlite' | 'oracle' | string;
+
+export interface AuthSession { accessToken: string; tokenType: string; expiresIn: number; user: { id: string; email: string; role: string } }
+
+export async function login(email: string, password: string): Promise<AuthSession> {
+  const session = await request<AuthSession>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+  sessionStorage.setItem(SESSION_TOKEN_KEY, session.accessToken);
+  return session;
+}
+
+export function logout() { sessionStorage.removeItem(SESSION_TOKEN_KEY); }
+export function hasAuthSession() { return Boolean(sessionStorage.getItem(SESSION_TOKEN_KEY)); }
 
 class APIError extends Error {
   constructor(readonly status: number, message: string) {
@@ -88,11 +100,13 @@ function writeOutbox(items: PendingWrite[]) {
 let outboxFlush: Promise<void> | null = null;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers },
   });
   if (!response.ok) {
+    if (response.status === 401 && path !== '/auth/login') window.dispatchEvent(new CustomEvent('reqtrace:auth-required'));
     const body = await response.json().catch(() => null) as { detail?: unknown } | null;
     const detail = response.status < 500 && typeof body?.detail === 'string' ? body.detail : `The local API returned HTTP ${response.status}.`;
     throw new APIError(response.status, detail);
@@ -138,6 +152,21 @@ function mergeRemote<T extends { id: string }>(local: T[], remote: T[]): T[] {
 export async function connectBackend(localProjects: ProjectRecord[], localRequirements: RequirementRecord[]) {
   try {
     const health = await request<{ database: DatabaseKind }>('/health');
+    if (health.database === 'oracle') {
+      const projects = await request<ProjectRecord[]>('/projects');
+      const requirementsByProject = await Promise.all(projects.map((project) => request<RequirementRecord[]>(`/projects/${project.id}/requirements`)));
+      const pending = pendingWriteCount();
+      const remoteProjectIds = new Set(projects.map((project) => project.id));
+      const localOnly = localProjects.some((project) => !remoteProjectIds.has(project.id));
+      return {
+        online: true,
+        database: health.database,
+        projects,
+        requirements: requirementsByProject.flat(),
+        pending,
+        error: pending || localOnly ? 'Local browser data stays on this device. Oracle does not import cached projects or pending local writes automatically.' : null,
+      };
+    }
     await flushOutbox();
     const remoteBefore = await request<ProjectRecord[]>('/projects');
     const remoteProjectIds = new Set(remoteBefore.map((project) => project.id));
@@ -178,14 +207,26 @@ export async function connectBackend(localProjects: ProjectRecord[], localRequir
 }
 
 export async function queueWrite(method: PendingWrite['method'], path: string, body: Record<string, unknown> = {}) {
-  const queue = readOutbox();
-  queue.push({ id: crypto.randomUUID(), method, path, body });
-  writeOutbox(queue);
+  let remoteDatabase: DatabaseKind | null = null;
   try {
     const health = await request<{ database: DatabaseKind }>('/health');
+    remoteDatabase = health.database;
+    if (health.database === 'oracle') {
+      await request(path, { method, ...(method === 'DELETE' ? {} : { body: JSON.stringify(body) }) });
+      const pending = pendingWriteCount();
+      return { online: true, database: health.database, pending, error: pending ? 'Older local browser changes remain queued and were not copied to Oracle.' : null };
+    }
+    const queue = readOutbox();
+    queue.push({ id: crypto.randomUUID(), method, path, body });
+    writeOutbox(queue);
     await flushOutbox();
     return { online: true, database: health.database, pending: 0, error: null };
   } catch (error) {
+    if (remoteDatabase !== 'oracle') {
+      const queue = readOutbox();
+      queue.push({ id: crypto.randomUUID(), method, path, body });
+      writeOutbox(queue);
+    }
     return { online: false, database: null, pending: pendingWriteCount(), error: describeError(error) };
   }
 }

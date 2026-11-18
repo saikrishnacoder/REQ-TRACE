@@ -30,11 +30,22 @@ class Settings(BaseSettings):
     oracle_config_dir: str | None = None
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    auth_required: bool | None = None
+    auth_token_secret: str = Field(default="", repr=False)
+    auth_token_ttl_minutes: int = 60
+    auth_bootstrap_email: str = ""
+    auth_bootstrap_password: str = Field(default="", repr=False)
     ai_api_key: str = Field(default="", repr=False)
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4o-mini"
     github_token: str = Field(default="", repr=False)
     github_api_url: str = "https://api.github.com"
+
+    @property
+    def authentication_enabled(self) -> bool:
+        if self.auth_required is not None:
+            return self.auth_required
+        return self.database_mode.casefold() == "oracle"
 
     @property
     def resolved_database_url(self) -> str | URL:

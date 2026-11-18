@@ -1,12 +1,14 @@
 import json
+import time
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest, urlopen
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pathlib import Path
 from alembic import command
 from alembic.config import Config
@@ -15,9 +17,10 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import engine, get_db
-from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
+from app.auth import decode_token, hash_password, issue_token, verify_password
+from app.database import SessionLocal, engine, get_db
+from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution, UserAccount
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -26,6 +29,10 @@ async def lifespan(_app: FastAPI):
     if settings.database_mode.casefold() == "local":
         config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         command.upgrade(config, "head")
+    if settings.authentication_enabled:
+        if len(settings.auth_token_secret) < 32 or "replace-with" in settings.auth_token_secret.casefold():
+            raise RuntimeError("AUTH_TOKEN_SECRET must contain at least 32 characters when authentication is enabled")
+        seed_initial_admin()
     yield
 
 
@@ -45,8 +52,136 @@ app.add_middleware(
         "tauri://localhost",
     ],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+_rate_windows: dict[tuple[str, str], tuple[float, int]] = {}
+
+
+@app.middleware("http")
+async def authenticate_api(request: Request, call_next):
+    if not settings.authentication_enabled or request.method == "OPTIONS" or request.url.path in {
+        "/api/v1/health", "/api/docs", "/api/openapi.json", "/docs/oauth2-redirect",
+    }:
+        return await call_next(request)
+    if len(settings.auth_token_secret) < 32:
+        return JSONResponse(status_code=503, content={"detail": "Authentication is not configured"})
+    client_ip = request.client.host if request.client else "unknown"
+    login_route = request.url.path == "/api/v1/auth/login"
+    bucket = (client_ip, "login" if login_route else "api")
+    now = time.monotonic()
+    if len(_rate_windows) > 10_000:
+        for old_bucket, (old_started, _) in list(_rate_windows.items()):
+            if now - old_started >= 300:
+                del _rate_windows[old_bucket]
+    window_seconds, maximum = (300.0, 5) if login_route else (60.0, 300)
+    started, count = _rate_windows.get(bucket, (now, 0))
+    if now - started >= window_seconds:
+        started, count = now, 0
+    if count >= maximum:
+        retry_after = max(1, int(window_seconds - (now - started)))
+        return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again later."}, headers={"Retry-After": str(retry_after)})
+    _rate_windows[bucket] = (started, count + 1)
+    if login_route:
+        return await call_next(request)
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    claims = decode_token(token, settings.auth_token_secret) if scheme.casefold() == "bearer" else None
+    if claims is None:
+        return JSONResponse(status_code=401, content={"detail": "A valid bearer token is required"}, headers={"WWW-Authenticate": "Bearer"})
+    role = claims["role"]
+    if request.url.path.startswith("/api/v1/auth/users") and role != "Admin":
+        return JSONResponse(status_code=403, content={"detail": "Only administrators can manage user accounts"})
+    if request.method not in {"GET", "HEAD"} and role == "Viewer":
+        return JSONResponse(status_code=403, content={"detail": "Viewer role cannot modify project data"})
+    if request.method == "DELETE" and role != "Admin":
+        return JSONResponse(status_code=403, content={"detail": "Only administrators can delete records"})
+    request.state.user = claims
+    return await call_next(request)
+
+
+def seed_initial_admin() -> None:
+    """Create the one-time bootstrap administrator without resetting credentials."""
+    with SessionLocal() as db:
+        existing = db.scalar(select(UserAccount).limit(1))
+        if existing is not None:
+            return
+        email = settings.auth_bootstrap_email.strip().casefold()
+        password = settings.auth_bootstrap_password
+        if not email or len(password) < 12 or "replace-with" in password.casefold():
+            raise RuntimeError("Set AUTH_BOOTSTRAP_EMAIL and a 12+ character AUTH_BOOTSTRAP_PASSWORD to initialize the first admin")
+        db.add(UserAccount(id=str(uuid.uuid4()), email=email, password_hash=hash_password(password), role="Admin", active=True))
+        db.commit()
+
+
+@app.post("/api/v1/auth/login", response_model=LoginResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled for this workspace")
+    email = payload.email.strip().casefold()
+    user = db.scalar(select(UserAccount).where(UserAccount.email == email))
+    if user is None or not user.active or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
+    ttl = max(5, min(settings.auth_token_ttl_minutes, 24 * 60))
+    token = issue_token(user.id, user.email, user.role, settings.auth_token_secret, ttl)
+    return {"access_token": token, "token_type": "bearer", "expires_in": ttl * 60,
+        "user": {"id": user.id, "email": user.email, "role": user.role}}
+
+
+@app.get("/api/v1/auth/me")
+def current_user(request: Request):
+    if not settings.authentication_enabled:
+        return {"authenticated": False, "authRequired": False}
+    claims = getattr(request.state, "user", {})
+    return {"authenticated": True, "authRequired": True, "id": claims.get("sub"),
+        "email": claims.get("email"), "role": claims.get("role")}
+
+
+@app.get("/api/v1/auth/users", response_model=list[UserAccountRead])
+def list_users(db: Session = Depends(get_db)):
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="User administration is not enabled for this workspace")
+    return list(db.scalars(select(UserAccount).order_by(UserAccount.created_at, UserAccount.email)).all())
+
+
+@app.post("/api/v1/auth/users", response_model=UserAccountRead, status_code=status.HTTP_201_CREATED)
+def create_user(payload: UserAccountCreate, db: Session = Depends(get_db)):
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="User administration is not enabled for this workspace")
+    user = UserAccount(id=str(uuid.uuid4()), email=payload.email, password_hash=hash_password(payload.password),
+        role=payload.role, active=True)
+    db.add(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+    return user
+
+
+@app.patch("/api/v1/auth/users/{user_id}", response_model=UserAccountRead)
+def update_user(user_id: str, payload: UserAccountUpdate, request: Request, db: Session = Depends(get_db)):
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="User administration is not enabled for this workspace")
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Provide a role or active state to change")
+    user = db.get(UserAccount, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User account not found")
+    if request.state.user.get("sub") == user_id and changes.get("active") is False:
+        raise HTTPException(status_code=409, detail="You cannot deactivate your own account")
+    removes_admin = user.role == "Admin" and user.active and (changes.get("role", "Admin") != "Admin" or changes.get("active") is False)
+    if removes_admin:
+        active_admins = db.scalar(select(func.count()).select_from(UserAccount).where(UserAccount.role == "Admin", UserAccount.active.is_(True))) or 0
+        if active_admins <= 1:
+            raise HTTPException(status_code=409, detail="At least one active administrator must remain")
+    for field, value in changes.items():
+        setattr(user, field, value)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def append_audit(db: Session, project_id: str, action: str, requirement_id: str | None = None, detail: dict | None = None) -> None:

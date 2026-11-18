@@ -43,8 +43,15 @@ npm exec tsc -- --noEmit
 
 ## Security and deployment boundary
 
-The local API defaults to loopback. Authentication, RBAC, and rate limiting
-have not been implemented. **Do not expose this API or Oracle mode on a
-network.** AI and GitHub credentials belong only in the backend environment;
-never put them in frontend configuration or source control. Oracle adapter
-support does not by itself provide a production-ready team service.
+The local API defaults to loopback. Oracle mode requires signed bearer tokens
+and applies basic Admin/Editor/Viewer write guards; local mode remains
+unauthenticated by default. Admins can create and deactivate accounts through
+the API. Project membership and project-level isolation, password reset,
+immediate token revocation, distributed rate limiting, and deployment
+hardening remain incomplete. **Do not expose this API or Oracle mode on a
+shared network.**
+Oracle mode reads persisted server records and does not automatically import
+projects or queued changes from the browser cache.
+AI and GitHub credentials belong only in the backend environment; never put
+them in frontend configuration or source control. Oracle adapter support does
+not by itself provide a production-ready team service.

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RequirementType = Literal["Functional", "Non-functional", "Security", "Performance", "Usability"]
 Priority = Literal["Critical", "High", "Medium", "Low"]
@@ -12,6 +12,51 @@ RelationshipType = Literal["depends_on", "relates_to", "conflicts_with"]
 
 class APIModel(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=lambda value: value.split("_")[0] + "".join(part.title() for part in value.split("_")[1:]))
+
+
+class LoginRequest(APIModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class LoginResponse(APIModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: dict[str, str]
+
+
+class UserAccountCreate(APIModel):
+    email: str = Field(min_length=5, max_length=320)
+    password: str = Field(min_length=12, max_length=256)
+    role: Literal["Admin", "Editor", "Viewer"] = "Viewer"
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized.count("@") != 1 or "." not in normalized.rsplit("@", 1)[-1]:
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+
+class UserAccountUpdate(APIModel):
+    role: Literal["Admin", "Editor", "Viewer"] | None = None
+    active: bool | None = None
+
+    @model_validator(mode="after")
+    def reject_null_updates(self):
+        if any(name in self.model_fields_set and getattr(self, name) is None for name in ("role", "active")):
+            raise ValueError("Role and active must have concrete values")
+        return self
+
+
+class UserAccountRead(APIModel):
+    id: str
+    email: str
+    role: str
+    active: bool
+    created_at: datetime
 
 
 class ProjectCreate(APIModel):

@@ -2,12 +2,15 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, get_db
 from app.main import app
+from app import main
 from app import models  # noqa: F401 - register ORM models
+from app.auth import hash_password
+from app.config import settings
 
 
 @pytest.fixture
@@ -365,3 +368,72 @@ def test_ai_test_case_suggestions_are_reviewable_not_saved(client: TestClient, m
     assert result["savedAutomatically"] is False
     assert result["suggestions"][0]["expectedResult"] == "The confirmation screen includes a receipt ID."
     assert client.get(f"/api/v1/projects/{project['id']}/test-cases").json() == []
+
+
+def test_authenticated_api_tokens_enforce_read_and_admin_roles(client: TestClient, monkeypatch) -> None:
+    from app.auth import issue_token
+
+    monkeypatch.setattr(settings, "auth_required", True)
+    monkeypatch.setattr(settings, "auth_token_secret", "unit-test-secret-that-is-long-enough-for-hmac")
+    session_generator = app.dependency_overrides[get_db]()
+    db = next(session_generator)
+    db.add(models.UserAccount(id="viewer-user", email="viewer@example.test", password_hash=hash_password("test-password-123"), role="Viewer", active=True))
+    db.commit()
+    db.close()
+    session_generator.close()
+
+    login = client.post("/api/v1/auth/login", json={"email": " VIEWER@example.test ", "password": "test-password-123"})
+    assert login.status_code == 200
+    token = login.json()["accessToken"]
+    assert client.get("/api/v1/projects").status_code == 401
+    assert client.get("/api/v1/projects", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert client.post("/api/v1/projects", json={"name": "Blocked", "key": "BLOCKED"}, headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+    admin_token = issue_token("admin-user", "admin@example.test", "Admin", settings.auth_token_secret, 5)
+    created = client.post("/api/v1/projects", json={"name": "Secure", "key": "SECURE"}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert created.status_code == 201
+    assert client.delete(f"/api/v1/projects/{created.json()['id']}", headers={"Authorization": f"Bearer {token}"}).status_code == 403
+    assert client.get("/api/v1/auth/users", headers={"Authorization": f"Bearer {token}"}).status_code == 403
+    account = client.post("/api/v1/auth/users", json={"email": "editor@example.test", "password": "editor-password-123", "role": "Editor"}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert account.status_code == 201
+    assert "passwordHash" not in account.json()
+    assert client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"role": None}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 422
+    editor_token = client.post("/api/v1/auth/login", json={"email": "editor@example.test", "password": "editor-password-123"}).json()["accessToken"]
+    assert client.post("/api/v1/projects", json={"name": "Editor Project", "key": "EDIT"}, headers={"Authorization": f"Bearer {editor_token}"}).status_code == 201
+    disabled = client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert disabled.status_code == 200 and disabled.json()["active"] is False
+    assert client.post("/api/v1/auth/login", json={"email": "editor@example.test", "password": "editor-password-123"}).status_code == 401
+    admin_account = client.post("/api/v1/auth/users", json={"email": "second-admin@example.test", "password": "admin-password-123", "role": "Admin"}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert admin_account.status_code == 201
+    assert client.patch(f"/api/v1/auth/users/{admin_account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 409
+    for _ in range(2):
+        assert client.post("/api/v1/auth/login", json={"email": "viewer@example.test", "password": "wrong-password"}).status_code == 401
+    limited = client.post("/api/v1/auth/login", json={"email": "viewer@example.test", "password": "wrong-password"})
+    assert limited.status_code == 429
+    assert int(limited.headers["Retry-After"]) > 0
+
+
+def test_token_rejects_tampering_and_wrong_secret() -> None:
+    from app.auth import decode_token, issue_token
+
+    secret = "secret-value-long-enough-for-testing"
+    token = issue_token("user", "u@example.test", "Viewer", secret, 5)
+    body, signature = token.split(".")
+    assert decode_token(f"{body}.x{signature}", secret) is None
+    assert decode_token(token, "different-secret-value-for-testing") is None
+    assert decode_token(issue_token("user", "u@example.test", "Viewer", secret, -1), secret) is None
+
+
+def test_bootstrap_admin_is_only_created_once(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "auth_bootstrap_email", "admin@example.test")
+    monkeypatch.setattr(settings, "auth_bootstrap_password", "initial-admin-password")
+    session_generator = app.dependency_overrides[get_db]()
+    db = next(session_generator)
+    monkeypatch.setattr(main, "SessionLocal", lambda: db)
+    main.seed_initial_admin()
+    first_hash = db.scalar(select(models.UserAccount.password_hash).where(models.UserAccount.email == "admin@example.test"))
+    main.seed_initial_admin()
+    second_hash = db.scalar(select(models.UserAccount.password_hash).where(models.UserAccount.email == "admin@example.test"))
+    assert first_hash == second_hash
+    assert db.scalar(select(models.UserAccount.role).where(models.UserAccount.email == "admin@example.test")) == "Admin"
+    session_generator.close()

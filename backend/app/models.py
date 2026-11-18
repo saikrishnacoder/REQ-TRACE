@@ -280,3 +280,15 @@ class RequirementComment(Base):
     author: Mapped[str] = mapped_column("AUTHOR", String(120), nullable=False)
     content: Mapped[str] = mapped_column("CONTENT", Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class UserAccount(Base):
+    __tablename__ = "RT_USERS"
+    __table_args__ = (UniqueConstraint("EMAIL", name="UQ_RT_USERS_EMAIL"),)
+
+    id: Mapped[str] = mapped_column("USER_ID", String(36), primary_key=True)
+    email: Mapped[str] = mapped_column("EMAIL", String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column("PASSWORD_HASH", String(256), nullable=False)
+    role: Mapped[str] = mapped_column("ROLE", String(16), nullable=False, default="Viewer")
+    active: Mapped[bool] = mapped_column("ACTIVE", Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

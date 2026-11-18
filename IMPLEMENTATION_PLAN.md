@@ -37,9 +37,11 @@ local and shared storage remain the product direction.
 
 The local SQLite, Oracle adapter, Alembic history, Tauri/PyInstaller packaging,
 and product modules have since been implemented incrementally. Oracle server
-mode remains a database development adapter only: remote synchronization,
-authentication, and multi-user authorization are not enabled. Keep the API on
-loopback; no network service is safe to expose until those controls are built.
+mode remains a database development adapter, not a production team service.
+Oracle mode now requires an initial bearer-authentication foundation with
+global roles, but remote synchronization and project-level authorization are
+incomplete. Keep the API on loopback; no network service is safe to expose
+until the remaining controls and deployment verification are complete.
 
 ## Audit and hardening update (historical baseline, 2026-11-17)
 
@@ -164,6 +166,25 @@ selection. Test generation was added from requirement context with explicit
 user review before saving. TypeScript and all 17 backend tests pass. The
 refreshed 28.88 MiB installer passed the packaged-sidecar smoke test.
 
+## Authenticated API foundation (2026-11-18)
+
+Revision `20261118_0011` adds persistent user accounts. Oracle mode requires
+authentication by default; the initial administrator is provisioned from
+server-only bootstrap environment variables. Passwords use PBKDF2-HMAC-SHA256
+hashes, bearer tokens are HMAC-signed with a configurable short expiration,
+and the app uses tab-scoped session storage with a sign-in gate and sign-out.
+Admin can create/list/deactivate accounts; global Admin/Editor/Viewer guards
+protect writes and deletes. In-process request limits throttle login and API
+traffic. API tests cover bootstrap idempotency, login, token tampering, role
+guards, account deactivation, last-admin protection, and throttling. TypeScript,
+all 20 backend tests, Windows packaging, and the post-package sidecar suite pass.
+
+This is not yet safe for shared network deployment: roles are global, projects
+are not isolated by membership, existing tokens remain valid until expiry
+after an account is deactivated, password reset is absent, and in-memory rate
+limits do not coordinate across multiple workers. No live Oracle startup was
+available to verify bootstrap against an Oracle instance.
+
 ## Current audit against the master prompt (2026-11-18)
 
 See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the route inventory, evidence,
@@ -174,10 +195,13 @@ matrix; it does not model design components or development task records.
 
 ### Delivery gates still open
 
-1. **Secure shared service (P0):** implement identity, password/session/token
-   lifecycle, project authorization and role checks, rate limiting, audit
-   attribution, and deployment configuration before enabling network access.
-   Add authorization tests for every API family and verify Oracle deployment.
+1. **Secure shared service (P0):** the first auth foundation now provides a
+   bootstrap admin, PBKDF2 password hashes, expiring HMAC bearer tokens, and
+   coarse global role guards, an account admin API, and per-process request
+   limits. Still implement project membership/isolation, password reset,
+   immediate token revocation, distributed rate limiting, audit actor
+   attribution, and deployment hardening before enabling network access. Add
+   authorization tests for every API family and verify Oracle deployment.
 2. **Testing completeness:** add browser E2E tests for route loading, forms,
    CRUD, responsive navigation, and offline recovery; perform keyboard and
    screen-reader checks; install and upgrade the NSIS artifact on a clean

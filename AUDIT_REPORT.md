@@ -20,7 +20,7 @@ been verified unless explicitly stated.
 
 | Module | Current implementation | Verified status / remaining work |
 |---|---|---|
-| Navigation and routes | Overview, projects, requirements, intake, project settings, traceability, tests, defects, AI, assistant, GitHub, reports, automation, and not-found route | Routes are implemented in `src/App.tsx`; automated browser route/form coverage is absent. No dedicated user settings or authentication route. |
+| Navigation and routes | Overview, projects, requirements, intake, project settings, traceability, tests, defects, AI, assistant, GitHub, reports, automation, and not-found route | Routes are implemented in `src/App.tsx`; automated browser route/form coverage is absent. Authentication appears as a sign-in gate rather than a URL route; no user-settings page. |
 | Dashboard | Project and requirement KPIs, test/run/defect metrics, status distribution, recent audit activity, refresh | Uses persisted API data. Date filters, trend charts, and a richer activity feed remain open. |
 | Requirements | CRUD/review, soft delete, filtering, sorting, pagination, CSV import/export, bulk priority, history, comments, R-R relationships | Persisted API behavior is tested. Excel/PDF export, tags, assignment, and generalized bulk editing remain open. Document intake stores a source reference and manually entered text; it does not parse or upload the selected file. |
 | AI intelligence | Structured requirement analysis, history, heuristic fallback, criteria recommendations, reviewable test suggestions | Fallback/schema behavior is tested. Live provider behavior needs credentials and has not been verified. Duplicate/contradiction analysis across the corpus and accept/reject/edit for all suggestion types remain open. |
@@ -33,9 +33,9 @@ been verified unless explicitly stated.
 | Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
 | Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite and Oracle dialect support | SQLite migration and packaged-sidecar smoke checks pass. A live Oracle upgrade/rollback and backup/restore are unverified. |
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
-| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events | **No authentication, authorization/RBAC, rate limiting, or CSRF defense is implemented. Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
+| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account admin API, role guards, and in-process request limits | Oracle mode requires bearer authentication by default; Viewer is read-only and Admin manages accounts/deletes. Project-level authorization/isolation, password reset, immediate token revocation, distributed rate limiting, CSRF, and deployment hardening remain absent. **Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
-| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest milestone: 17 backend tests passed; `tsc --noEmit` passed; Windows NSIS build passed. One Starlette/httpx deprecation warning remains. No frontend E2E suite or clean-machine installer verification. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest auth milestone: 20 backend tests passed; `tsc --noEmit` passed; Windows NSIS build passed (28.89 MiB), and the post-package suite passed. One Starlette/httpx deprecation warning remains. No frontend E2E suite or clean-machine installer verification. |
 
 ## Route inventory
 
@@ -73,10 +73,12 @@ gates below still apply.
 
 ## Risks and release boundary
 
-1. The largest release blocker is missing authentication and authorization.
-   Oracle mode is a database adapter, not a secure multi-user service. Keep the
-   API bound to loopback until access control, deployment hardening, and
-   authorization tests are implemented.
+1. The largest release blocker is incomplete authorization and deployment
+   security. Oracle mode now requires signed bearer tokens with basic global
+   role guards, but users cannot be administered through the app and projects
+   are not isolated by membership. Add project-level authorization, password
+   recovery, immediate token revocation, distributed request limits, CSRF
+   controls, and deployment hardening before shared hosting.
 2. Oracle connectivity and schema upgrades were not exercised against a live
    Oracle instance in this environment. `python-oracledb` Thin mode supports
    newer Oracle versions; Oracle 11g requires a compatible Instant Client and
@@ -93,12 +95,12 @@ gates below still apply.
 
 ## Verification record
 
-For the cross-module traceability milestone, verification ran:
+For the latest authenticated API milestone, verification ran:
 
 - `npm exec tsc -- --noEmit` — passed.
-- `backend/.venv/Scripts/python.exe -m pytest tests -q` — 17 passed, one
+- `backend/.venv/Scripts/python.exe -m pytest tests -q` — 20 passed, one
   Starlette/httpx deprecation warning.
-- `npm run desktop:build` — passed; generated a 28.88 MiB Windows NSIS
+- `npm run desktop:build` — passed; generated a 28.89 MiB Windows NSIS
   installer and bundled API sidecar.
 - Packaged-sidecar smoke coverage runs in the backend suite; suite passed after
   packaging as well.
