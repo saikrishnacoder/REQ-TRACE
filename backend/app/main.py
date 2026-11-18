@@ -19,8 +19,47 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.auth import decode_token, hash_password, issue_token, verify_password
 from app.database import SessionLocal, engine, get_db
-from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution, UserAccount
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
+from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, ProjectMembership, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution, UserAccount
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectMemberCreate, ProjectMemberRead, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
+
+
+def authorize_project_access(request: Request, db: Session = Depends(get_db)) -> None:
+    if not settings.authentication_enabled or request.method == "OPTIONS":
+        return
+    claims = getattr(request.state, "user", {})
+    if claims.get("role") == "Admin":
+        return
+    path = request.url.path.removeprefix("/api/v1/").strip("/").split("/")
+    if path[:2] == ["auth", "users"]:
+        raise HTTPException(status_code=403, detail="Only administrators can manage user accounts")
+    if path and path[0] == "github" and len(path) > 1 and path[1] == "repositories":
+        raise HTTPException(status_code=403, detail="Only administrators can browse available GitHub repositories")
+
+    project_id: str | None = None
+    if path and path[0] == "projects" and len(path) > 1:
+        project_id = path[1]
+        if len(path) > 2 and path[2] == "members":
+            raise HTTPException(status_code=403, detail="Only administrators can manage project membership")
+    elif len(path) > 1:
+        entity_id = path[1]
+        entity_model = {
+            "requirements": Requirement,
+            "test-cases": TestCase,
+            "defects": Defect,
+            "conversations": Conversation,
+        }.get(path[0])
+        if entity_model is not None:
+            project_id = db.scalar(select(entity_model.project_id).where(entity_model.id == entity_id))
+    if project_id is None:
+        return
+    membership = db.scalar(select(ProjectMembership).where(
+        ProjectMembership.project_id == project_id,
+        ProjectMembership.user_id == claims.get("sub"),
+    ))
+    if membership is None:
+        raise HTTPException(status_code=403, detail="You do not have access to this project")
+    if request.method not in {"GET", "HEAD"} and (claims.get("role") == "Viewer" or membership.role == "Viewer"):
+        raise HTTPException(status_code=403, detail="Viewer role cannot modify project data")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -42,6 +81,7 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
+    dependencies=[Depends(authorize_project_access)],
 )
 app.add_middleware(
     CORSMiddleware,
@@ -220,13 +260,26 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/projects", response_model=list[ProjectRead])
-def list_projects(db: Session = Depends(get_db)):
-    return list(db.scalars(select(Project).order_by(Project.created_at.desc())).all())
+def list_projects(request: Request, db: Session = Depends(get_db)):
+    query = select(Project).order_by(Project.created_at.desc())
+    claims = getattr(request.state, "user", {})
+    if settings.authentication_enabled and claims.get("role") != "Admin":
+        project_ids = select(ProjectMembership.project_id).where(ProjectMembership.user_id == claims.get("sub"))
+        query = query.where(Project.id.in_(project_ids))
+    return list(db.scalars(query).all())
 
 
 @app.post("/api/v1/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
-def create_project(payload: ProjectCreate, response: Response, db: Session = Depends(get_db)):
+def create_project(payload: ProjectCreate, response: Response, request: Request, db: Session = Depends(get_db)):
     if payload.id and (existing := db.get(Project, payload.id)) is not None:
+        claims = getattr(request.state, "user", {})
+        if settings.authentication_enabled and claims.get("role") != "Admin":
+            membership = db.scalar(select(ProjectMembership).where(
+                ProjectMembership.project_id == existing.id,
+                ProjectMembership.user_id == claims.get("sub"),
+            ))
+            if membership is None:
+                raise HTTPException(status_code=403, detail="You do not have access to this project")
         return existing
     created_at = datetime.now(timezone.utc)
     project = Project(
@@ -237,6 +290,9 @@ def create_project(payload: ProjectCreate, response: Response, db: Session = Dep
         created_at=created_at,
     )
     db.add(project)
+    claims = getattr(request.state, "user", {})
+    if settings.authentication_enabled and claims.get("role") != "Admin":
+        db.add(ProjectMembership(id=str(uuid.uuid4()), project_id=project.id, user_id=claims["sub"], role="Editor"))
     append_audit(db, project.id, "project_created", detail={"name": project.name, "key": project.key})
     append_sync_event(db, "project.upsert", "project", project.id, {
         "id": project.id,
@@ -252,6 +308,57 @@ def create_project(payload: ProjectCreate, response: Response, db: Session = Dep
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="A project with this key already exists") from exc
+
+
+@app.get("/api/v1/projects/{project_id}/members", response_model=list[ProjectMemberRead])
+def list_project_members(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list(db.scalars(select(ProjectMembership).where(ProjectMembership.project_id == project_id).order_by(ProjectMembership.created_at)).all())
+
+
+@app.post("/api/v1/projects/{project_id}/members", response_model=ProjectMemberRead, status_code=status.HTTP_201_CREATED)
+def add_project_member(project_id: str, payload: ProjectMemberCreate, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    user = db.get(UserAccount, payload.user_id)
+    if user is None or not user.active:
+        raise HTTPException(status_code=404, detail="Active user account not found")
+    if user.role == "Viewer" and payload.role == "Editor":
+        raise HTTPException(status_code=422, detail="A global Viewer account cannot be assigned as a project Editor")
+    membership = db.scalar(select(ProjectMembership).where(
+        ProjectMembership.project_id == project_id,
+        ProjectMembership.user_id == payload.user_id,
+    ))
+    if membership is not None:
+        previous_role = membership.role
+        membership.role = payload.role
+        append_audit(db, project_id, "project_member_role_changed", detail={
+            "userId": user.id, "previousRole": previous_role, "role": payload.role,
+        })
+        db.commit()
+        db.refresh(membership)
+        return membership
+    membership = ProjectMembership(id=str(uuid.uuid4()), project_id=project_id, user_id=payload.user_id, role=payload.role)
+    db.add(membership)
+    append_audit(db, project_id, "project_member_added", detail={"userId": user.id, "role": payload.role})
+    db.commit()
+    db.refresh(membership)
+    return membership
+
+
+@app.delete("/api/v1/projects/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_project_member(project_id: str, user_id: str, db: Session = Depends(get_db)) -> Response:
+    membership = db.scalar(select(ProjectMembership).where(
+        ProjectMembership.project_id == project_id,
+        ProjectMembership.user_id == user_id,
+    ))
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Project membership not found")
+    append_audit(db, project_id, "project_member_removed", detail={"userId": user_id, "role": membership.role})
+    db.delete(membership)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/api/v1/projects/{project_id}/requirements", response_model=list[RequirementRead])
@@ -271,6 +378,8 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     if payload.id and (existing := db.get(Requirement, payload.id)) is not None:
+        if existing.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Requirement not found in this project")
         return existing
 
     number = project.next_requirement_number

@@ -74,10 +74,18 @@ attempts per five-minute in-process window; other authenticated API traffic is
 limited to 300 requests/minute per process. These in-memory limits do not
 coordinate across multiple workers or instances.
 
+Project membership is managed through `/api/v1/projects/{project_id}/members`.
+System Admins can assign or remove active users as project Editors or Viewers.
+Non-admin project lists are filtered to memberships, and the API checks
+membership for project-scoped routes and requirement/test/defect/conversation
+record routes. The desktop Project settings page exposes these membership
+actions to Admins; global account lifecycle remains API-only.
+
 This remains an initial authentication foundation, not a complete shared-
-service security boundary. Project membership/isolation, password reset,
-immediate token revocation, distributed rate limiting, CSRF controls, and
-deployment hardening remain incomplete. **Do not bind the API to a public or
+service security boundary. Organization tenancy, password reset, immediate
+token revocation, distributed rate limiting, CSRF controls, exhaustive route
+authorization testing, and deployment hardening remain incomplete. **Do not
+bind the API to a public or
 shared network.** Keep `.env` out of source control and use a secret manager
 for any future deployment. The app has no file-upload endpoint; document
 intake records a reference and user-entered text only.

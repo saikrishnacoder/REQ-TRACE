@@ -292,3 +292,18 @@ class UserAccount(Base):
     role: Mapped[str] = mapped_column("ROLE", String(16), nullable=False, default="Viewer")
     active: Mapped[bool] = mapped_column("ACTIVE", Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class ProjectMembership(Base):
+    __tablename__ = "RT_PROJECT_MEMBERS"
+    __table_args__ = (
+        UniqueConstraint("PROJECT_ID", "USER_ID", name="UQ_RT_PROJECT_MEMBER"),
+        CheckConstraint("PROJECT_ROLE IN ('Editor','Viewer')", name="CK_RT_PROJECT_MEMBER_ROLE"),
+        Index("IX_RT_PROJECT_MEMBER_USER", "USER_ID", "PROJECT_ID"),
+    )
+
+    id: Mapped[str] = mapped_column("MEMBERSHIP_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column("USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column("PROJECT_ROLE", String(16), nullable=False, default="Viewer")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())

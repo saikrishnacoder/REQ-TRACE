@@ -7,9 +7,9 @@ import {
   ListChecks, LogOut, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
   Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
-import { connectBackend, hasAuthSession, login, logout, pendingWriteCount, queueWrite } from './services/persistence';
+import { addProjectMember, connectBackend, createUserAccount, getCurrentUser, getProjectMembers, getUserAccounts, hasAuthSession, login, logout, pendingWriteCount, queueWrite, removeProjectMember } from './services/persistence';
 import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, generateTestCaseSuggestions, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
-import type { AuditRecord, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot } from './services/persistence';
+import type { AuditRecord, AuthIdentity, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, ProjectMemberRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot, UserAccountRecord } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
 type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
@@ -44,7 +44,7 @@ interface Requirement {
   reviewedAt?: string;
 }
 
-const STORAGE = { projects: 'reqtrace.projects.v1', requirements: 'reqtrace.requirements.v1', selected: 'reqtrace.selectedProject.v1' };
+const STORAGE = { projects: 'reqtrace.projects.v1', requirements: 'reqtrace.requirements.v1', remoteProjects: 'reqtrace.oracle.projects.v1', remoteRequirements: 'reqtrace.oracle.requirements.v1', selected: 'reqtrace.selectedProject.v1' };
 const TYPES: RequirementType[] = ['Functional', 'Non-functional', 'Security', 'Performance', 'Usability'];
 const PRIORITIES: Priority[] = ['Critical', 'High', 'Medium', 'Low'];
 
@@ -60,8 +60,7 @@ function readStorage<T>(key: string, fallback: T): T {
 const dateLabel = (value: string) => new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 const makeId = () => crypto.randomUUID();
 
-function normalizeRequirements(projects: Project[]): Requirement[] {
-  const cached = readStorage<unknown[]>(STORAGE.requirements, []);
+function normalizeRequirements(projects: Project[], cached = readStorage<unknown[]>(STORAGE.requirements, [])): Requirement[] {
   return cached.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null).map((entry, index) => {
     const legacyId = String(entry.id ?? '');
     const statusValue = String(entry.status ?? entry.approvalStatus ?? 'Draft').toLowerCase();
@@ -99,8 +98,8 @@ type BackendState = 'checking' | 'online' | 'offline';
 type DatabaseKind = 'sqlite' | 'oracle' | null;
 
 function App() {
-  const [projects, setProjects] = useState<Project[]>(() => readStorage(STORAGE.projects, []));
-  const [requirements, setRequirements] = useState<Requirement[]>(() => normalizeRequirements(readStorage(STORAGE.projects, [])));
+  const [projects, setProjects] = useState<Project[]>(() => readStorage(hasAuthSession() ? STORAGE.remoteProjects : STORAGE.projects, []));
+  const [requirements, setRequirements] = useState<Requirement[]>(() => normalizeRequirements(readStorage(hasAuthSession() ? STORAGE.remoteProjects : STORAGE.projects, []), readStorage(hasAuthSession() ? STORAGE.remoteRequirements : STORAGE.requirements, [])));
   const [selectedProjectId, setSelectedProjectId] = useState(() => readStorage(STORAGE.selected, ''));
   const [backendState, setBackendState] = useState<BackendState>('checking');
   const [backendDatabase, setBackendDatabase] = useState<DatabaseKind>(null);
@@ -116,8 +115,9 @@ function App() {
     return () => window.removeEventListener('reqtrace:auth-required', requireLogin);
   }, []);
 
-  useEffect(() => localStorage.setItem(STORAGE.projects, JSON.stringify(projects)), [projects]);
-  useEffect(() => localStorage.setItem(STORAGE.requirements, JSON.stringify(requirements)), [requirements]);
+  const persistToRemoteCache = backendDatabase === 'oracle' || (backendDatabase === null && hasAuthSession());
+  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? STORAGE.remoteProjects : STORAGE.projects, JSON.stringify(projects)); }, [projects, backendState, persistToRemoteCache, authRequired]);
+  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? STORAGE.remoteRequirements : STORAGE.requirements, JSON.stringify(requirements)); }, [requirements, backendState, persistToRemoteCache, authRequired]);
   useEffect(() => {
     let active = true;
     let syncing: Promise<void> | null = null;
@@ -132,8 +132,9 @@ function App() {
       setPendingCount(snapshot.pending);
       setSyncError(snapshot.error);
       if (snapshot.online) {
-        setProjects((current) => mergeRecords(snapshot.projects, current));
-        setRequirements((current) => mergeRecords(snapshot.requirements, current));
+        setProjects(snapshot.projects);
+        setRequirements(snapshot.requirements);
+        setAuthRequired(false);
       }
       }).finally(() => { syncing = null; });
       return syncing;
@@ -203,7 +204,7 @@ function App() {
 
   return (
     <BrowserRouter>
-      {authRequired ? <AuthenticationGate onSuccess={() => { setAuthRequired(false); window.dispatchEvent(new Event('online')); }} onLogout={logout} /> : !currentProject ? (
+      {authRequired ? <AuthenticationGate onSuccess={() => { window.dispatchEvent(new Event('online')); }} onLogout={logout} /> : backendState === 'checking' ? <div className="welcome-screen"><section className="welcome-card"><div className="eyebrow">WORKSPACE</div><h1>Connecting to ReqTrace…</h1><p>Checking authentication and project storage.</p></section></div> : !currentProject ? (
         <ProjectWelcome onCreate={createProject} />
       ) : (
         <Workspace
@@ -674,7 +675,76 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
 }
 
 function ProjectSettings({ project }: { project: Project }) {
-  return <div className="narrow-page"><div className="eyebrow">PROJECT</div><h1 className="page-heading">Project settings</h1><p className="page-subheading">The project space currently active in this browser.</p><section className="surface settings-card"><div className="settings-icon"><FolderKanban size={18} /></div><div className="settings-line"><span>Name</span><b>{project.name}</b></div><div className="settings-line"><span>Project key</span><b className="mono">{project.key}</b></div><div className="settings-line"><span>Description</span><b>{project.description || 'No description provided'}</b></div><div className="settings-line"><span>Created</span><b>{dateLabel(project.createdAt)}</b></div><div className="settings-line"><span>Storage</span><b><span className="local-dot" /> Browser cache + local API</b></div><div className="settings-note"><CircleHelp size={15} /> The local API persists records in the configured database. Shared team sync and user accounts are not connected yet.</div></section></div>;
+  const [identity, setIdentity] = useState<AuthIdentity | null>(null);
+  const [members, setMembers] = useState<ProjectMemberRecord[]>([]);
+  const [users, setUsers] = useState<UserAccountRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'Editor' | 'Viewer'>('Viewer');
+  const [existingUserId, setExistingUserId] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const refreshAccess = async () => {
+    setLoading(true);
+    try {
+      const current = await getCurrentUser();
+      setIdentity(current);
+      if (current.authenticated && current.role === 'Admin') {
+        const [memberRows, userRows] = await Promise.all([getProjectMembers(project.id), getUserAccounts()]);
+        setMembers(memberRows); setUsers(userRows); setError('');
+      } else { setMembers([]); setUsers([]); }
+    } catch (e) { setError(e instanceof Error ? e.message : 'Project access settings could not be loaded.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void refreshAccess(); }, [project.id]);
+
+  const assignExisting = async (event: FormEvent) => {
+    event.preventDefault(); if (!existingUserId) return;
+    setBusy(true); setError(''); setNotice('');
+    try { await addProjectMember(project.id, existingUserId, role); setNotice('Project access updated.'); setExistingUserId(''); await refreshAccess(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not update project access.'); }
+    finally { setBusy(false); }
+  };
+
+  const createAndAssign = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(''); setNotice('');
+    try {
+      const user = await createUserAccount(email, password, role);
+      let assignmentError = '';
+      try { await addProjectMember(project.id, user.id, role); setNotice(`Created ${user.email} and added them to this project.`); }
+      catch (e) { assignmentError = `Account ${user.email} was created, but project access could not be added: ${e instanceof Error ? e.message : 'unknown error'}`; }
+      setEmail(''); setPassword(''); await refreshAccess();
+      if (assignmentError) setError(assignmentError);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not create the account.'); }
+    finally { setBusy(false); }
+  };
+
+  const removeMember = async (member: ProjectMemberRecord) => {
+    const user = users.find((item) => item.id === member.userId);
+    if (!window.confirm(`Remove ${user?.email ?? 'this user'} from ${project.name}?`)) return;
+    setBusy(true); setError(''); setNotice('');
+    try { await removeProjectMember(project.id, member.userId); setNotice('Project access removed.'); await refreshAccess(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not remove project access.'); }
+    finally { setBusy(false); }
+  };
+
+  const assignedIds = new Set(members.map((member) => member.userId));
+  const availableUsers = users.filter((user) => user.active && !assignedIds.has(user.id));
+  return <div className="narrow-page"><div className="eyebrow">PROJECT</div><h1 className="page-heading">Project settings</h1><p className="page-subheading">Workspace details and access for the active project.</p>
+    <section className="surface settings-card"><div className="settings-icon"><FolderKanban size={18} /></div><div className="settings-line"><span>Name</span><b>{project.name}</b></div><div className="settings-line"><span>Project key</span><b className="mono">{project.key}</b></div><div className="settings-line"><span>Description</span><b>{project.description || 'No description provided'}</b></div><div className="settings-line"><span>Created</span><b>{dateLabel(project.createdAt)}</b></div><div className="settings-line"><span>Storage</span><b><span className="local-dot" /> Configured API + browser cache</b></div><div className="settings-note"><CircleHelp size={15} /> Oracle workspaces require a sign-in. Browser cache data and older queued local changes are not copied to Oracle automatically.</div></section>
+    {identity?.authRequired && identity.role !== 'Admin' && <section className="surface settings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT ACCESS</span><h2>Membership management</h2></div></div><p className="settings-note"><ShieldCheck size={15} /> A system Admin manages project membership. Your role is {identity.role ?? 'unknown'}.</p></section>}
+    {identity?.authRequired && identity.role === 'Admin' && <section className="surface settings-card project-members-card"><div className="section-heading"><div><span className="eyebrow">ACCESS CONTROL</span><h2>Project members</h2></div><span className="phase-pill">{members.length} assigned</span></div>
+      {error && <div className="sync-alert" role="alert">{error}</div>}{notice && <div className="sync-alert" role="status">{notice}</div>}
+      {loading ? <div className="empty-state"><span>Loading memberships…</span></div> : <>
+        {members.length === 0 ? <EmptyState icon={<ShieldCheck size={18} />} title="No project members assigned" text="System Admins can always access the project. Add Editors or Viewers below." /> : <div className="project-member-list">{members.map((member) => { const memberUser = users.find((user) => user.id === member.userId); return <div className="project-member-row" key={member.id}><span className="project-member-avatar">{(memberUser?.email ?? 'U').slice(0, 1).toUpperCase()}</span><div><b>{memberUser?.email ?? 'Unavailable account'}</b><small>{memberUser?.role ?? 'User'} · Added {dateLabel(member.createdAt)}</small></div><span className="phase-pill">{member.role}</span><button className="button button-secondary button-small" disabled={busy} onClick={() => void removeMember(member)}>Remove</button></div>; })}</div>}
+        <form className="project-member-form" onSubmit={assignExisting}><span className="eyebrow">ADD EXISTING ACCOUNT</span><label>Account<select value={existingUserId} onChange={(event) => { const id = event.target.value; setExistingUserId(id); if (users.find((user) => user.id === id)?.role === 'Viewer') setRole('Viewer'); }}><option value="">Select an active account</option>{availableUsers.map((user) => <option value={user.id} key={user.id}>{user.email} · {user.role}</option>)}</select></label><label>Project role<select value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="Viewer">Viewer</option><option value="Editor" disabled={users.find((user) => user.id === existingUserId)?.role === 'Viewer'}>Editor</option></select></label><button className="button button-secondary" type="submit" disabled={busy || !existingUserId}>Add member</button></form>
+        <form className="project-member-form create-member-form" onSubmit={createAndAssign}><span className="eyebrow">CREATE ACCOUNT AND ASSIGN</span><label>Email<input type="email" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Temporary password<input type="password" required minLength={12} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} /><small>At least 12 characters; share it with the user securely.</small></label><label>Account and project role<select value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="Viewer">Viewer</option><option value="Editor">Editor</option></select></label><button className="button button-primary" type="submit" disabled={busy || !email.trim() || password.length < 12}>{busy ? 'Creating…' : 'Create and assign'}<Plus size={14} /></button></form>
+      </>}
+    </section>}
+  </div>;
 }
 
 function TraceabilityPage({ project, requirements, createLink, deleteLink }: {

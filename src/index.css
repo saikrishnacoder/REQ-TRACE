@@ -552,6 +552,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .auth-form input { min-height: 40px; border: 1px solid var(--line); border-radius: 7px; padding: 0 11px; color: var(--ink); background: var(--surface); font: inherit; }
 .auth-form input:focus-visible { outline: 2px solid #8b5cf6; outline-offset: 2px; }
 .auth-form .button { justify-content: center; min-height: 40px; }
+.project-members-card { margin-top: 16px; }
+.project-members-card > .section-heading { margin-bottom: 14px; }
+.project-member-list { display: grid; gap: 8px; }
+.project-member-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.project-member-avatar { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #d9ceff; background: #30264c; font-weight: 700; font-size: 12px; }
+.project-member-row > div { min-width: 0; display: grid; gap: 3px; }
+.project-member-row > div b { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.project-member-row > div small, .project-member-form label small { color: var(--muted); font-size: 10px; }
+.project-member-form { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(120px, 1fr) auto; align-items: end; gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); }
+.project-member-form > .eyebrow { grid-column: 1 / -1; }
+.project-member-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.project-member-form input, .project-member-form select { min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; color: var(--ink); background: var(--surface); font: inherit; }
+.create-member-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(130px, .8fr) auto; }
+@media (max-width: 720px) { .project-member-form, .create-member-form { grid-template-columns: 1fr; } .project-member-row { grid-template-columns: 30px minmax(0, 1fr) auto; } .project-member-row > .button { grid-column: 2 / -1; justify-self: end; } }
 .assistant-message > b { color: #c4b5fd; font-size: 11px; }
 .assistant-message p { margin: 8px 0; white-space: pre-wrap; color: #d0d6e2; line-height: 1.6; font-size: 13px; }
 .assistant-sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }

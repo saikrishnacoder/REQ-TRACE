@@ -180,10 +180,26 @@ guards, account deactivation, last-admin protection, and throttling. TypeScript,
 all 20 backend tests, Windows packaging, and the post-package sidecar suite pass.
 
 This is not yet safe for shared network deployment: roles are global, projects
-are not isolated by membership, existing tokens remain valid until expiry
-after an account is deactivated, password reset is absent, and in-memory rate
-limits do not coordinate across multiple workers. No live Oracle startup was
-available to verify bootstrap against an Oracle instance.
+are now isolated by Editor/Viewer memberships at project and record routes,
+existing tokens remain valid until expiry after an account is deactivated,
+password reset is absent, and in-memory rate limits do not coordinate across
+multiple workers. The admin/member workflows are API-only. No live Oracle
+startup was available to verify migration/bootstrap against an Oracle instance.
+
+## Project membership authorization slice (2026-11-18)
+
+Revision `20261118_0012` adds project/user membership records with Editor or
+Viewer roles. System Admins manage memberships through `/api/v1/projects/{id}/members`.
+Non-admin project listings are filtered by membership; a shared authorization
+dependency checks project-scoped routes and resolves requirement, case, defect,
+and conversation IDs before granting access. Project creators with the Editor
+role receive Editor membership automatically. Tests cover project filtering,
+assignment/removal, record-ID route checks, Viewer write rejection, and
+cross-project project-ID replay. The project settings page now provides an
+Admin membership surface to assign, create, and remove project access. Global
+account lifecycle still uses the API. These guards do not provide organization
+tenancy; an exhaustive API authorization review and live Oracle migration
+check remain open.
 
 ## Current audit against the master prompt (2026-11-18)
 
@@ -195,13 +211,14 @@ matrix; it does not model design components or development task records.
 
 ### Delivery gates still open
 
-1. **Secure shared service (P0):** the first auth foundation now provides a
-   bootstrap admin, PBKDF2 password hashes, expiring HMAC bearer tokens, and
-   coarse global role guards, an account admin API, and per-process request
-   limits. Still implement project membership/isolation, password reset,
-   immediate token revocation, distributed rate limiting, audit actor
-   attribution, and deployment hardening before enabling network access. Add
-   authorization tests for every API family and verify Oracle deployment.
+1. **Secure shared service (P0):** auth now provides a bootstrap admin, PBKDF2
+   password hashes, expiring HMAC bearer tokens, global roles, project
+   memberships, filtered project lists, record-route guards, account/member
+   admin APIs, and per-process request limits. Still implement password reset,
+   immediate token revocation, distributed rate limiting, organization
+   tenancy, audit actor attribution, global account lifecycle UI, and
+   deployment hardening.
+   Audit every API family and verify Oracle deployment before network access.
 2. **Testing completeness:** add browser E2E tests for route loading, forms,
    CRUD, responsive navigation, and offline recovery; perform keyboard and
    screen-reader checks; install and upgrade the NSIS artifact on a clean

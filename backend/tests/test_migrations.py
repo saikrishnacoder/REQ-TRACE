@@ -23,7 +23,7 @@ def test_upgrade_creates_a_fresh_schema(tmp_path) -> None:
     upgrade_on(engine)
 
     tables = set(inspect(engine).get_table_names())
-    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "alembic_version"} <= tables
+    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "RT_USERS", "RT_PROJECT_MEMBERS", "alembic_version"} <= tables
     engine.dispose()
 
 
@@ -38,8 +38,8 @@ def test_upgrade_preserves_data_from_create_all_schema(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert connection.execute(text("SELECT NAME FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "Legacy"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261118_0011"
-        assert "RT_USERS" in inspect(engine).get_table_names()
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261118_0012"
+        assert {"RT_USERS", "RT_PROJECT_MEMBERS"} <= set(inspect(engine).get_table_names())
     engine.dispose()
 
 

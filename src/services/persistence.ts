@@ -64,6 +64,9 @@ const API_BASE = (import.meta.env.VITE_API_URL || (isTauri() ? 'http://127.0.0.1
 type DatabaseKind = 'sqlite' | 'oracle' | string;
 
 export interface AuthSession { accessToken: string; tokenType: string; expiresIn: number; user: { id: string; email: string; role: string } }
+export interface AuthIdentity { authenticated: boolean; authRequired: boolean; id?: string; email?: string; role?: string }
+export interface UserAccountRecord { id: string; email: string; role: string; active: boolean; createdAt: string }
+export interface ProjectMemberRecord { id: string; projectId: string; userId: string; role: 'Editor' | 'Viewer'; createdAt: string }
 
 export async function login(email: string, password: string): Promise<AuthSession> {
   const session = await request<AuthSession>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
@@ -73,6 +76,12 @@ export async function login(email: string, password: string): Promise<AuthSessio
 
 export function logout() { sessionStorage.removeItem(SESSION_TOKEN_KEY); }
 export function hasAuthSession() { return Boolean(sessionStorage.getItem(SESSION_TOKEN_KEY)); }
+export const getCurrentUser = () => request<AuthIdentity>('/auth/me');
+export const getUserAccounts = () => request<UserAccountRecord[]>('/auth/users');
+export const createUserAccount = (email: string, password: string, role: 'Editor' | 'Viewer') => request<UserAccountRecord>('/auth/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+export const getProjectMembers = (projectId: string) => request<ProjectMemberRecord[]>(`/projects/${projectId}/members`);
+export const addProjectMember = (projectId: string, userId: string, role: 'Editor' | 'Viewer') => request<ProjectMemberRecord>(`/projects/${projectId}/members`, { method: 'POST', body: JSON.stringify({ userId, role }) });
+export const removeProjectMember = (projectId: string, userId: string) => request<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' });
 
 class APIError extends Error {
   constructor(readonly status: number, message: string) {

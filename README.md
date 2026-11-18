@@ -45,11 +45,13 @@ npm exec tsc -- --noEmit
 
 The local API defaults to loopback. Oracle mode requires signed bearer tokens
 and applies basic Admin/Editor/Viewer write guards; local mode remains
-unauthenticated by default. Admins can create and deactivate accounts through
-the API. Project membership and project-level isolation, password reset,
-immediate token revocation, distributed rate limiting, and deployment
-hardening remain incomplete. **Do not expose this API or Oracle mode on a
-shared network.**
+unauthenticated by default. Admins can create/deactivate accounts and assign
+Editor/Viewer project membership through the API. Project and record routes
+enforce membership, and non-admin project lists are filtered. Project-level
+membership management is available in Project settings. Global account
+lifecycle UI, password reset, immediate token revocation, distributed rate
+limiting, and organization tenancy remain incomplete. **Do not expose this API
+or Oracle mode on a shared network.**
 Oracle mode reads persisted server records and does not automatically import
 projects or queued changes from the browser cache.
 AI and GitHub credentials belong only in the backend environment; never put

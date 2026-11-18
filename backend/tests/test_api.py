@@ -392,14 +392,53 @@ def test_authenticated_api_tokens_enforce_read_and_admin_roles(client: TestClien
     admin_token = issue_token("admin-user", "admin@example.test", "Admin", settings.auth_token_secret, 5)
     created = client.post("/api/v1/projects", json={"name": "Secure", "key": "SECURE"}, headers={"Authorization": f"Bearer {admin_token}"})
     assert created.status_code == 201
+    private_requirement = client.post(f"/api/v1/projects/{created.json()['id']}/requirements", json={
+        "title": "Private requirement", "statement": "This stays in its project.", "type": "Functional", "priority": "High",
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Private requirement",
+    }, headers={"Authorization": f"Bearer {admin_token}"}).json()
+    private_test_case = client.post(f"/api/v1/projects/{created.json()['id']}/test-cases", json={
+        "requirementId": private_requirement["id"], "title": "Private case", "steps": ["Run it"], "expectedResult": "It passes",
+    }, headers={"Authorization": f"Bearer {admin_token}"}).json()
+    private_defect = client.post(f"/api/v1/projects/{created.json()['id']}/defects", json={
+        "requirementId": private_requirement["id"], "title": "Private issue", "description": "Only project members should see this.",
+    }, headers={"Authorization": f"Bearer {admin_token}"}).json()
+    private_conversation = client.post(f"/api/v1/projects/{created.json()['id']}/assistant/messages", json={"message": "Summarize this private project"}, headers={"Authorization": f"Bearer {admin_token}"}).json()["conversation"]
     assert client.delete(f"/api/v1/projects/{created.json()['id']}", headers={"Authorization": f"Bearer {token}"}).status_code == 403
+    assert client.get("/api/v1/projects", headers={"Authorization": f"Bearer {token}"}).json() == []
     assert client.get("/api/v1/auth/users", headers={"Authorization": f"Bearer {token}"}).status_code == 403
     account = client.post("/api/v1/auth/users", json={"email": "editor@example.test", "password": "editor-password-123", "role": "Editor"}, headers={"Authorization": f"Bearer {admin_token}"})
     assert account.status_code == 201
     assert "passwordHash" not in account.json()
     assert client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"role": None}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 422
     editor_token = client.post("/api/v1/auth/login", json={"email": "editor@example.test", "password": "editor-password-123"}).json()["accessToken"]
-    assert client.post("/api/v1/projects", json={"name": "Editor Project", "key": "EDIT"}, headers={"Authorization": f"Bearer {editor_token}"}).status_code == 201
+    editor_headers = {"Authorization": f"Bearer {editor_token}"}
+    viewer_headers = {"Authorization": f"Bearer {token}"}
+    assert client.get(f"/api/v1/requirements/{private_requirement['id']}/versions", headers=editor_headers).status_code == 403
+    assert client.post(f"/api/v1/projects/{created.json()['id']}/members", json={"userId": "viewer-user", "role": "Editor"}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 422
+    assert client.post(f"/api/v1/test-cases/{private_test_case['id']}/executions", json={"status": "Passed", "actualResult": "Pass"}, headers=editor_headers).status_code == 403
+    assert client.patch(f"/api/v1/defects/{private_defect['id']}", json={"status": "Resolved"}, headers=editor_headers).status_code == 403
+    assert client.get(f"/api/v1/conversations/{private_conversation['id']}/messages", headers=editor_headers).status_code == 403
+    editor_project = client.post("/api/v1/projects", json={"name": "Editor Project", "key": "EDIT"}, headers=editor_headers)
+    assert editor_project.status_code == 201
+    editor_project_id = editor_project.json()["id"]
+    assert client.post("/api/v1/projects", json={"id": created.json()["id"], "name": "Probe", "key": "PROBE"}, headers=editor_headers).status_code == 403
+    editor_requirement = client.post(f"/api/v1/projects/{editor_project_id}/requirements", json={
+        "title": "Editor requirement", "statement": "Visible to assigned members.", "type": "Functional", "priority": "Medium",
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Editor requirement",
+    }, headers=editor_headers).json()
+    assert [item["id"] for item in client.get("/api/v1/projects", headers=editor_headers).json()] == [editor_project_id]
+    assert client.get(f"/api/v1/projects/{editor_project_id}/requirements", headers=viewer_headers).status_code == 403
+    assigned = client.post(f"/api/v1/projects/{editor_project_id}/members", json={"userId": "viewer-user", "role": "Viewer"}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert assigned.status_code == 201
+    assert client.get(f"/api/v1/projects/{editor_project_id}/requirements", headers=viewer_headers).status_code == 200
+    assert client.get(f"/api/v1/requirements/{editor_requirement['id']}/comments", headers=viewer_headers).status_code == 200
+    assert client.post(f"/api/v1/requirements/{editor_requirement['id']}/comments", json={"content": "View only"}, headers=viewer_headers).status_code == 403
+    assert client.post(f"/api/v1/projects/{editor_project_id}/requirements", json={}, headers=viewer_headers).status_code == 403
+    assert client.delete(f"/api/v1/projects/{editor_project_id}/members/viewer-user", headers={"Authorization": f"Bearer {admin_token}"}).status_code == 204
+    assert client.get(f"/api/v1/projects/{editor_project_id}/requirements", headers=viewer_headers).status_code == 403
+    assert client.get(f"/api/v1/requirements/{editor_requirement['id']}/comments", headers=viewer_headers).status_code == 403
+    member_actions = {event["action"] for event in client.get(f"/api/v1/projects/{editor_project_id}/audit", headers=editor_headers).json()}
+    assert {"project_member_added", "project_member_removed"} <= member_actions
     disabled = client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {admin_token}"})
     assert disabled.status_code == 200 and disabled.json()["active"] is False
     assert client.post("/api/v1/auth/login", json={"email": "editor@example.test", "password": "editor-password-123"}).status_code == 401

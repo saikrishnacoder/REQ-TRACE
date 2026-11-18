@@ -59,6 +59,19 @@ class UserAccountRead(APIModel):
     created_at: datetime
 
 
+class ProjectMemberCreate(APIModel):
+    user_id: str = Field(min_length=1, max_length=36)
+    role: Literal["Editor", "Viewer"] = "Viewer"
+
+
+class ProjectMemberRead(APIModel):
+    id: str
+    project_id: str
+    user_id: str
+    role: str
+    created_at: datetime
+
+
 class ProjectCreate(APIModel):
     id: str | None = None
     name: str = Field(min_length=1, max_length=200)
