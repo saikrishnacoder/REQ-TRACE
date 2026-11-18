@@ -228,3 +228,5 @@ export interface RequirementCommentRecord { id: string; projectId: string; requi
 export const getRequirementVersions = (id: string) => request<RequirementVersionRecord[]>(`/requirements/${id}/versions`);
 export const getRequirementComments = (id: string) => request<RequirementCommentRecord[]>(`/requirements/${id}/comments`);
 export const createRequirementComment = (id: string, content: string) => request<RequirementCommentRecord>(`/requirements/${id}/comments`, { method: 'POST', body: JSON.stringify({ content }) });
+export interface TestCaseSuggestionRecord { title: string; scenarioType: 'positive' | 'negative' | 'boundary' | 'functional' | 'regression'; preconditions: string; steps: string[]; expectedResult: string }
+export const generateTestCaseSuggestions = (requirementId: string) => request<{ requirementId: string; provider: string; savedAutomatically: boolean; suggestions: TestCaseSuggestionRecord[] }>(`/requirements/${requirementId}/generate-test-cases`, { method: 'POST' });

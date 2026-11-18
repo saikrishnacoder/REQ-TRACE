@@ -34,7 +34,7 @@ The previous implementation plan correctly limits the current release to local p
 | Oracle | `oracle+oracledb`, environment-based settings, setup SQL and explicit schema initializer | No schema migrations or authenticated team API yet. The setup SQL contains a password placeholder by design; secrets must remain in ignored `.env`/environment variables. | P1 for team use |
 | AI | No model/provider client or server endpoints | Requirement analysis, generation, grounded assistant, structured validation, fallback, history, and key management are absent. Current conversation intake explicitly captures text without AI. | P1 |
 | GitHub | Server-side read-only token integration; manual repo sync for issues, PRs, commits, branches; persisted requirement links | No OAuth flow, webhook, write actions, or external credential verification. Sync imports first 100 records per category. | P1 |
-| Traceability/testing/defects | No corresponding backend models, APIs, or screens | Matrix, coverage, execution, test generation, and defect tracking cannot be used. | P1 |
+| Traceability/testing/defects | Requirement-link matrix, test cases and manual runs, AI test suggestions, defect register | Full multi-entity graph, automated execution, suites/assignment and richer defect workflow remain open. | P1 |
 | Reports/automation | No report or automation implementation | No scheduled jobs, execution history, exports, or rule controls. | P2 |
 | Security/privacy | Secrets are excluded by `.gitignore`; local sidecar defaults to loopback; React escapes rendered values | No authentication/RBAC/CSRF/rate limiting or file-upload validation exists. SQLite and browser cache are not encrypted. Do not host the current API publicly or accept untrusted document uploads. | P0 for shared deployment |
 | UI/UX/accessibility | Light green/white visual system; compact controls and small 8–11px text in many areas | Current palette differs from the requested charcoal/navy/violet direction. No reusable toast/skeleton/error components. Drawer lacks dialog/focus-management behavior; icon-only mobile nav lacks visible labels. Mobile is compressed navigation rather than a true expandable drawer. | P2 |
@@ -125,6 +125,8 @@ Provider configuration is server-side (`AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`)
 and never returned to the client. Fallback persistence and output validation
 are covered by the backend suite; an external provider request has not been
 verified because no provider credential was supplied in this workspace.
+The test management page also generates reviewable, unsaved case suggestions
+from a selected requirement. A user explicitly saves accepted cases.
 
 ## Grounded assistant progress
 

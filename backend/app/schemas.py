@@ -322,6 +322,21 @@ class RequirementCommentRead(APIModel):
     created_at: datetime
 
 
+class TestCaseSuggestion(APIModel):
+    title: str = Field(min_length=1, max_length=300)
+    scenario_type: Literal["positive", "negative", "boundary", "functional", "regression"]
+    preconditions: str = Field(default="", max_length=3000)
+    steps: list[str] = Field(min_length=1, max_length=30)
+    expected_result: str = Field(min_length=1, max_length=3000)
+
+
+class TestCaseSuggestionsRead(APIModel):
+    requirement_id: str
+    provider: str
+    saved_automatically: bool = False
+    suggestions: list[TestCaseSuggestion] = Field(max_length=12)
+
+
 class AnalysisIssue(APIModel):
     category: Literal["clarity", "ambiguity", "completeness", "testability", "duplicate", "contradiction"]
     explanation: str = Field(min_length=1, max_length=1000)

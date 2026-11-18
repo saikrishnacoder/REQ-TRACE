@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import engine, get_db
 from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, ProjectCreate, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -417,6 +417,45 @@ def create_test_case(project_id: str, payload: TestCaseCreate, db: Session = Dep
     db.commit()
     db.refresh(test_case)
     return test_case
+
+
+@app.post("/api/v1/requirements/{requirement_id}/generate-test-cases", response_model=TestCaseSuggestionsRead)
+def generate_test_case_suggestions(requirement_id: str, db: Session = Depends(get_db)):
+    requirement = db.get(Requirement, requirement_id)
+    if requirement is None or requirement.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    provider = "heuristic-fallback"
+    suggestions: list[TestCaseSuggestion] = []
+    if settings.ai_api_key.strip():
+        request_body = {"model": settings.ai_model, "temperature": 0.2, "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "Create up to 8 reviewable manual test case suggestions grounded only in the supplied requirement and acceptance criteria. Include positive, negative, boundary, functional, or regression scenarios only when the text supports them. Do not invent business rules. Return JSON: {\"suggestions\":[{\"title\":string,\"scenario_type\":string,\"preconditions\":string,\"steps\":[string],\"expected_result\":string}]}"},
+                {"role": "user", "content": json.dumps({"requirement": RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)}, ensure_ascii=False)},
+            ]}
+        try:
+            request = URLRequest(f"{settings.ai_base_url.rstrip('/')}/chat/completions", data=json.dumps(request_body).encode(),
+                headers={"Authorization": f"Bearer {settings.ai_api_key}", "Content-Type": "application/json"}, method="POST")
+            with urlopen(request, timeout=40) as response:
+                envelope = json.loads(response.read())
+            parsed = json.loads(envelope["choices"][0]["message"]["content"])
+            candidates = parsed.get("suggestions", parsed.get("testCases", []))
+            suggestions = [TestCaseSuggestion.model_validate(item) for item in candidates[:8]]
+            if suggestions:
+                provider = settings.ai_model
+        except Exception:
+            suggestions = []
+    if not suggestions:
+        criteria = requirement.acceptance_criteria or [requirement.statement]
+        for index, criterion in enumerate(criteria[:8], 1):
+            suggestions.append(TestCaseSuggestion(
+                title=f"Verify {requirement.code} criterion {index}", scenario_type="functional",
+                preconditions=requirement.preconditions or "Use the requirement's stated preconditions.",
+                steps=[f"Exercise the behavior described by: {requirement.statement}",
+                    "Check the observable result against the acceptance criterion."],
+                expected_result=criterion,
+            ))
+    return {"requirement_id": requirement.id, "provider": provider, "saved_automatically": False,
+        "suggestions": [item.model_dump(mode="json", by_alias=True) for item in suggestions]}
 
 
 @app.get("/api/v1/projects/{project_id}/defects", response_model=list[DefectRead])

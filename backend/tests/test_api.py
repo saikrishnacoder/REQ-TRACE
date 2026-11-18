@@ -340,3 +340,22 @@ def test_automation_read_only_rule_toggle_run_and_history(client: TestClient) ->
     assert client.get(f"/api/v1/projects/{project['id']}/automation/runs").json()[0]["ruleKey"] == "orphan_requirements"
     client.put(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements", json={"enabled": False})
     assert client.post(f"/api/v1/projects/{project['id']}/automation/rules/orphan_requirements/run").status_code == 409
+
+
+def test_ai_test_case_suggestions_are_reviewable_not_saved(client: TestClient, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_api_key", "")
+    project = client.post("/api/v1/projects", json={"name": "Generation", "key": "GEN"}).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Payment confirmation", "statement": "A buyer sees confirmation after payment.",
+        "type": "Functional", "priority": "High", "acceptanceCriteria": ["The confirmation screen includes a receipt ID."],
+        "sourceType": "Manual", "sourceReference": "Manual", "originalText": "Payment confirmation",
+    }).json()
+    response = client.post(f"/api/v1/requirements/{requirement['id']}/generate-test-cases")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["provider"] == "heuristic-fallback"
+    assert result["savedAutomatically"] is False
+    assert result["suggestions"][0]["expectedResult"] == "The confirmation screen includes a receipt ID."
+    assert client.get(f"/api/v1/projects/{project['id']}/test-cases").json() == []

@@ -75,8 +75,9 @@ compatible provider configuration is server-only (`AI_API_KEY`, `AI_BASE_URL`,
 `AI_MODEL`) and must be placed in the ignored backend `.env` or deployment
 environment. No key is included in the frontend or source control. External
 provider behavior remains unverified without credentials. AI test generation,
-grounded assistant conversations, streamed responses, and acceptance/rejection
-of all suggestion types are still planned.
+grounded assistant conversations, and saved analysis history are now implemented.
+Streaming responses and accept/reject/edit controls for every AI suggestion type
+remain future work.
 
 ## Manual test execution history slice (2026-11-17)
 
@@ -152,7 +153,15 @@ persisted create path, reports invalid row numbers, and exports with formula
 neutralization. Type and priority values are checked before creating records.
 Excel import and bulk field editing beyond priority remain planned.
 
+The test management page also generates structured suggestions from a selected
+requirement. Provider output is schema-validated; the fallback uses acceptance
+criteria and remains clearly labeled. Suggestions are review-only until a user
+adds a case. The fallback/no-auto-save API test passes as part of the 17-test
+backend suite.
+
 The `/projects` route lists project workspaces and switches the active project.
 The requirements list supports confirmed bulk priority changes on selected
 editable records. Approved and rejected baseline records are excluded from
-selection. TypeScript, Vite, the installer build, and all 16 backend tests pass.
+selection. Test generation was added from requirement context with explicit
+user review before saving. TypeScript and all 17 backend tests pass. The
+refreshed 28.88 MiB installer passed the packaged-sidecar smoke test.
