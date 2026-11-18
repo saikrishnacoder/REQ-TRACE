@@ -208,6 +208,12 @@ def test_test_cases_and_defects_are_persisted_and_audited(client: TestClient) ->
     assert client.patch(f"/api/v1/defects/{defect.json()['id']}", json={"status": "Resolved"}).json()["status"] == "Resolved"
     assert len(client.get(f"/api/v1/projects/{project['id']}/test-cases").json()) == 1
     assert len(client.get(f"/api/v1/projects/{project['id']}/defects").json()) == 1
+    matrix = client.get(f"/api/v1/projects/{project['id']}/traceability").json()
+    assert matrix["testCoveredPercent"] == 100
+    assert matrix["untestedRequirementIds"] == []
+    assert matrix["failedTestCaseIds"] == [test_case.json()["id"]]
+    assert matrix["testCases"][0]["id"] == test_case.json()["id"]
+    assert matrix["defects"][0]["id"] == defect.json()["id"]
     actions = {item["action"] for item in client.get(f"/api/v1/projects/{project['id']}/audit").json()}
     assert {"test_case_created", "test_execution_recorded", "defect_created", "defect_status_changed"} <= actions
 

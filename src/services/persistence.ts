@@ -42,6 +42,13 @@ export interface TraceabilitySnapshot {
   links: RequirementLinkRecord[];
   orphanRequirementIds: string[];
   linkedPercent: number;
+  testCases: TestCaseRecord[];
+  executions: TestExecutionRecord[];
+  defects: DefectRecord[];
+  githubLinks: { id: string; requirementId: string; recordId: string; recordType: string; externalId: string; title: string; state: string; htmlUrl: string }[];
+  untestedRequirementIds: string[];
+  failedTestCaseIds: string[];
+  testCoveredPercent: number;
 }
 
 interface PendingWrite {

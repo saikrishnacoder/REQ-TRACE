@@ -144,6 +144,13 @@ class TraceabilityRead(APIModel):
     links: list[RequirementLinkRead]
     orphan_requirement_ids: list[str]
     linked_percent: int
+    test_cases: list[dict[str, Any]]
+    executions: list[dict[str, Any]]
+    defects: list[dict[str, Any]]
+    github_links: list[dict[str, Any]]
+    untested_requirement_ids: list[str]
+    failed_test_case_ids: list[str]
+    test_covered_percent: int
 
 
 class TestCaseCreate(APIModel):

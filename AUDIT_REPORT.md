@@ -1,13 +1,13 @@
 # ReqTrace AI repository audit
 
-Audit date: 2026-11-17  
-Scope: checked-in application source, build configuration, database models, API routes, persistence adapters, desktop sidecar, documentation, and generated desktop build artifacts. This is a source/configuration audit; no test suite was found in the repository, and this report does not claim unrun workflows passed.
+Audit date: 2026-11-18
+Scope: checked-in application source, build configuration, database models, API routes, persistence adapters, desktop sidecar, documentation, and generated desktop build artifacts. The implementation now includes automated API coverage; external Oracle, live GitHub/AI credentials, and clean-machine installer workflows remain environment-dependent.
 
 ## Executive summary
 
-ReqTrace is a working-looking offline-first Phase 1 foundation, not yet the full traceability and testing intelligence platform in the master prompt. The project has a React 19 + TypeScript frontend, Tauri 2 Windows desktop wrapper, Python FastAPI sidecar, SQLAlchemy models, local SQLite persistence, an Oracle `python-oracledb` adapter, a browser cache/outbox, and NSIS packaging configuration. The frontend and backend contain real project and requirement intake/review code; the rest of the requested product areas are largely absent.
+ReqTrace has grown into a functional offline-first project, requirements, testing, defect, AI, GitHub, reporting, and quality-checking application. It has a React 19 + TypeScript frontend, Tauri 2 Windows desktop wrapper, Python FastAPI sidecar, SQLAlchemy models, local SQLite persistence, an Oracle `python-oracledb` adapter, a browser cache/outbox, and NSIS packaging. Some enterprise deployment and live external-service paths remain unverified or incomplete.
 
-The previous implementation plan correctly limits the current release to local project/requirement workflows and explicitly defers team authentication, remote synchronization, document parsing, and AI. Those boundaries should remain visible in the UI and release notes until their features exist.
+The current release is centered on local project workflows. Team authentication and public deployment controls remain required before shared Oracle hosting; live external service paths require credentials and provider setup.
 
 ## What is implemented
 
@@ -52,7 +52,7 @@ The previous implementation plan correctly limits the current release to local p
 | `/intake` | Manual/conversation text capture; document metadata + manually entered text | Partial; no parser/upload/AI |
 | `/project` | Read-only active project details | Partial |
 | `/new-project` | Create a project | Implemented |
-| `/traceability` | Persisted requirement-to-requirement link matrix and orphan list | Implemented; does not yet link tests, defects, code, or source artifacts |
+| `/traceability` | Requirement relationships, linked test cases and latest executions, defects, imported GitHub references, requirement-link coverage and test coverage | Implemented from project-scoped API data; code/design/task artifact types are not modeled |
 | `/tests` | Create/list cases, record actual results by run status, inspect execution history | Implemented for manual execution; test suites/assignment remain outstanding |
 | `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
 | `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |

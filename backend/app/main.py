@@ -295,11 +295,33 @@ def project_traceability(project_id: str, db: Session = Depends(get_db)):
     linked_ids = {item.source_requirement_id for item in links} | {item.target_requirement_id for item in links}
     orphan_ids = [item.id for item in requirements if item.id not in linked_ids]
     linked_percent = round((len(requirements) - len(orphan_ids)) * 100 / len(requirements)) if requirements else 0
+    cases = list(db.scalars(select(TestCase).where(TestCase.project_id == project_id).order_by(TestCase.created_at.desc())).all())
+    executions = list(db.scalars(select(TestExecution).where(TestExecution.project_id == project_id).order_by(TestExecution.executed_at.desc())).all())
+    latest_status: dict[str, str] = {}
+    for execution in executions:
+        latest_status.setdefault(execution.test_case_id, execution.status)
+    covered_ids = {item.requirement_id for item in cases if item.requirement_id}
+    untested_ids = [item.id for item in requirements if item.id not in covered_ids]
+    failed_case_ids = sorted(test_case_id for test_case_id, run_status in latest_status.items() if run_status == "Failed")
+    defects = list(db.scalars(select(Defect).where(Defect.project_id == project_id).order_by(Defect.created_at.desc())).all())
+    github_rows = db.execute(select(GitHubLink, GitHubRecord).join(GitHubRecord, GitHubRecord.id == GitHubLink.record_id)
+        .where(GitHubLink.project_id == project_id)).all()
+    github_links = [{"id": item.id, "requirementId": item.requirement_id, "recordId": record.id,
+        "recordType": record.record_type, "externalId": record.external_id, "title": record.title, "state": record.state,
+        "htmlUrl": record.html_url} for item, record in github_rows]
+    test_covered_percent = round((len(requirements) - len(untested_ids)) * 100 / len(requirements)) if requirements else 0
     return {
         "requirements": requirements,
         "links": links,
         "orphan_requirement_ids": orphan_ids,
         "linked_percent": linked_percent,
+        "test_cases": [TestCaseRead.model_validate(item).model_dump(mode="json", by_alias=True) for item in cases],
+        "executions": [TestExecutionRead.model_validate(item).model_dump(mode="json", by_alias=True) for item in executions],
+        "defects": [DefectRead.model_validate(item).model_dump(mode="json", by_alias=True) for item in defects],
+        "github_links": github_links,
+        "untested_requirement_ids": untested_ids,
+        "failed_test_case_ids": failed_case_ids,
+        "test_covered_percent": test_covered_percent,
     }
 
 

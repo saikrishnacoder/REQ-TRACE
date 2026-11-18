@@ -687,6 +687,9 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
   const links = snapshot?.links ?? [];
   const requirementById = new Map(displayedRequirements.map((item) => [item.id, item]));
   const orphanIds = new Set(snapshot?.orphanRequirementIds ?? []);
+  const untestedIds = new Set(snapshot?.untestedRequirementIds ?? []);
+  const latestExecutionByCase = new Map<string, TestExecutionRecord>();
+  for (const execution of snapshot?.executions ?? []) if (!latestExecutionByCase.has(execution.testCaseId)) latestExecutionByCase.set(execution.testCaseId, execution);
 
   const submitLink = async (event: FormEvent) => {
     event.preventDefault();
@@ -708,12 +711,14 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
   };
 
   return <div className="traceability-page">
-    <div className="welcome-row"><div><div className="eyebrow">PROJECT LINKS · {project.key}</div><h1 className="page-heading">Traceability</h1><p className="page-subheading">Connect related requirements and find records that have no relationship. This view does not represent test coverage.</p></div></div>
+    <div className="welcome-row"><div><div className="eyebrow">PROJECT LINKS · {project.key}</div><h1 className="page-heading">Traceability</h1><p className="page-subheading">See requirement dependencies, test coverage, latest runs, defects, and imported GitHub references in one project matrix.</p></div></div>
     {error && <div className="sync-alert trace-error" role="status"><span><b>Traceability data unavailable</b>{error}</span></div>}
     <div className="metric-grid trace-metrics">
       <Metric label="Requirements" value={displayedRequirements.length} icon={<FileText size={16} />} note="Active records in this project" />
       <Metric label="Relationships" value={links.length} icon={<Network size={16} />} note="Persisted requirement-to-requirement links" />
-      <Metric label="Linked requirements" value={snapshot ? displayedRequirements.length - snapshot.orphanRequirementIds.length : 0} icon={<CheckCircle2 size={16} />} note={snapshot ? `${snapshot.linkedPercent}% have at least one relationship` : 'Connect to the local API to calculate'} />
+      <Metric label="Linked requirements" value={snapshot ? displayedRequirements.length - snapshot.orphanRequirementIds.length : '—'} icon={<CheckCircle2 size={16} />} note={snapshot ? `${snapshot.linkedPercent}% have a requirement relationship` : 'Connect to the local API to calculate'} />
+      <Metric label="Test coverage" value={snapshot ? `${snapshot.testCoveredPercent}%` : '—'} icon={<ClipboardCheck size={16} />} note={snapshot ? `${displayedRequirements.length - snapshot.untestedRequirementIds.length} of ${displayedRequirements.length} linked to test cases` : 'Connect to the local API to calculate'} />
+      <Metric label="Latest failed cases" value={snapshot ? snapshot.failedTestCaseIds.length : '—'} icon={<CircleHelp size={16} />} note="Most recent recorded status per test case" />
     </div>
     <section className="surface trace-form-surface">
       <div className="section-heading"><div><span className="eyebrow">ADD A RELATIONSHIP</span><h2>Link two requirements</h2></div></div>
@@ -725,14 +730,18 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
       </form>}
     </section>
     <section className="surface trace-matrix-surface">
-      <div className="section-heading"><div><span className="eyebrow">REQUIREMENT MATRIX</span><h2>Related records</h2></div><span className="phase-pill">{loading ? 'Loading' : `${links.length} links`}</span></div>
-      {displayedRequirements.length === 0 ? <EmptyState icon={<BookOpen size={18} />} title="No requirements in this project" text="Capture requirements first to begin linking their scope." /> : <div className="trace-table-wrap"><table className="trace-table"><thead><tr><th>Requirement</th><th>Status</th><th>Relationships</th><th>Link state</th></tr></thead><tbody>{displayedRequirements.map((item) => {
+      <div className="section-heading"><div><span className="eyebrow">CROSS-MODULE MATRIX</span><h2>Trace links, tests, runs, defects, and GitHub</h2></div><span className="phase-pill">{loading ? 'Loading' : `${links.length} requirement links`}</span></div>
+      {displayedRequirements.length === 0 ? <EmptyState icon={<BookOpen size={18} />} title="No requirements in this project" text="Capture requirements first to begin linking their scope." /> : <div className="trace-table-wrap"><table className="trace-table"><thead><tr><th>Requirement</th><th>Relationships</th><th>Test cases / latest run</th><th>Defects</th><th>GitHub</th><th>Coverage</th></tr></thead><tbody>{displayedRequirements.map((item) => {
         const related = links.filter((link) => link.sourceRequirementId === item.id || link.targetRequirementId === item.id);
-        return <tr key={item.id}><td><span className="requirement-id">{item.code}</span><b>{item.title}</b></td><td><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></td><td>{related.length ? <div className="trace-related-list">{related.map((link) => {
+        const testCases = (snapshot?.testCases ?? []).filter((testCase) => testCase.requirementId === item.id);
+        const testCaseIds = new Set(testCases.map((testCase) => testCase.id));
+        const linkedDefects = (snapshot?.defects ?? []).filter((defect) => defect.requirementId === item.id || (defect.testCaseId && testCaseIds.has(defect.testCaseId)));
+        const github = (snapshot?.githubLinks ?? []).filter((record) => record.requirementId === item.id);
+        return <tr key={item.id}><td><span className="requirement-id">{item.code}</span><b>{item.title}</b><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></td><td>{related.length ? <div className="trace-related-list">{related.map((link) => {
           const otherId = link.sourceRequirementId === item.id ? link.targetRequirementId : link.sourceRequirementId;
           const other = requirementById.get(otherId);
           return <span className="trace-related-item" key={link.id}><span>{link.relationshipType.replaceAll('_', ' ')}</span><b>{other?.code ?? 'Unavailable record'}</b>{link.sourceRequirementId === item.id && <button className="icon-button danger-icon" aria-label={`Remove relationship to ${other?.code ?? otherId}`} title="Remove relationship" disabled={busy} onClick={() => void removeLink(item.id, link.id)}><X size={13} /></button>}</span>;
-        })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{snapshot ? orphanIds.has(item.id) ? <span className="trace-state orphan">Unlinked</span> : <span className="trace-state linked">Linked</span> : <span className="trace-state unknown">Unavailable</span>}</td></tr>;
+        })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{testCases.length ? <div className="trace-related-list">{testCases.map((testCase) => { const latest = latestExecutionByCase.get(testCase.id); return <span className="trace-related-item" key={testCase.id}><b>{testCase.code}</b><span>{testCase.title}</span><em className={`test-run-pill ${(latest?.status ?? 'Not run').toLowerCase().replace(' ', '-')}`}>{latest?.status ?? 'Not run'}</em></span>; })}</div> : <span className="trace-no-links">No linked test case</span>}</td><td>{linkedDefects.length ? <div className="trace-related-list">{linkedDefects.map((defect) => <span className="trace-related-item" key={defect.id}><b>{defect.code}</b><span>{defect.title}</span><em>{defect.status}</em></span>)}</div> : <span className="trace-no-links">No linked defects</span>}</td><td>{github.length ? <div className="trace-related-list">{github.map((record) => <a className="github-matrix-link" key={record.id} href={record.htmlUrl} target="_blank" rel="noreferrer">{record.recordType} #{record.externalId} <ArrowUpRight size={12} /></a>)}</div> : <span className="trace-no-links">No GitHub reference</span>}</td><td>{snapshot ? untestedIds.has(item.id) ? <span className="trace-state orphan">Untested</span> : <span className="trace-state linked">Covered</span> : <span className="trace-state unknown">Unavailable</span>}{orphanIds.has(item.id) && <small className="trace-substate">No requirement relationship</small>}</td></tr>;
       })}</tbody></table></div>}
     </section>
   </div>;
