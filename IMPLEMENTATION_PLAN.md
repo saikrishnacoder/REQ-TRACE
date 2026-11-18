@@ -35,25 +35,23 @@ local and shared storage remain the product direction.
 
 ## Current build boundary
 
-The React intake/review flow and Oracle schema already exist. This iteration
-adds durable local SQLite storage, a transactional sync outbox, an Oracle
-database mode, and the Tauri/PyInstaller packaging foundation. Oracle server
-mode is available for database development, but remote synchronization,
-authentication, multi-user authorization, document parsing, and AI extraction
-are not yet enabled. No network service is exposed without those protections.
+The local SQLite, Oracle adapter, Alembic history, Tauri/PyInstaller packaging,
+and product modules have since been implemented incrementally. Oracle server
+mode remains a database development adapter only: remote synchronization,
+authentication, and multi-user authorization are not enabled. Keep the API on
+loopback; no network service is safe to expose until those controls are built.
 
-## Audit and hardening update (2026-11-17)
+## Audit and hardening update (historical baseline, 2026-11-17)
 
 See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the repository-wide baseline and
 route inventory. The first follow-up slices add non-destructive Alembic
 bootstrap/upgrade support, a soft-delete migration with retained audit history,
 priority filtering, sorting, pagination, CSV export, a dark navy/violet theme,
 an explicit not-found page, and visible storage/sync errors. A persisted
-requirement-to-requirement traceability module now creates/removes links,
-records link audit events, and reports linked/orphan requirements. API,
-migration, and packaged-sidecar checks cover these workflows. AI, GitHub,
-test/defect management, full multi-entity traceability, reports, and automation
-remain future phases; see the audit report for sequencing and boundaries.
+requirement-to-requirement traceability module then created/removed links,
+recorded link audit events, and reported linked/orphan requirements. Subsequent
+sections below document the product modules added after that baseline. Current
+status and remaining work are in the audit report.
 
 ## Test management and defect register slice (2026-11-17)
 
@@ -165,3 +163,33 @@ editable records. Approved and rejected baseline records are excluded from
 selection. Test generation was added from requirement context with explicit
 user review before saving. TypeScript and all 17 backend tests pass. The
 refreshed 28.88 MiB installer passed the packaged-sidecar smoke test.
+
+## Current audit against the master prompt (2026-11-18)
+
+See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the route inventory, evidence,
+and limitation register. The previous baseline findings in this plan have
+been superseded by the progress records above. The latest traceability
+milestone adds requirement-linked test/run/defect/GitHub references to the
+matrix; it does not model design components or development task records.
+
+### Delivery gates still open
+
+1. **Secure shared service (P0):** implement identity, password/session/token
+   lifecycle, project authorization and role checks, rate limiting, audit
+   attribution, and deployment configuration before enabling network access.
+   Add authorization tests for every API family and verify Oracle deployment.
+2. **Testing completeness:** add browser E2E tests for route loading, forms,
+   CRUD, responsive navigation, and offline recovery; perform keyboard and
+   screen-reader checks; install and upgrade the NSIS artifact on a clean
+   Windows environment.
+3. **Domain completeness:** add suites and assignment; broaden defect fields
+   and history; model design/task trace records; add remaining analytics,
+   exports, and controlled automation capabilities from the master prompt.
+4. **Operational readiness:** verify live Oracle migrations, backup/restore,
+   AI/GitHub integrations with least-privilege test credentials, structured
+   logs, and scale behavior. Credentials and an Oracle environment were not
+   available during this audit.
+
+These are gates, not completed deliverables. The current implementation is a
+local-first functional build and must not be represented as an authenticated
+team SaaS product.

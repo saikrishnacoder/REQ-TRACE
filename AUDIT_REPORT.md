@@ -1,151 +1,107 @@
-# ReqTrace AI repository audit
+# ReqTrace AI technical audit and implementation report
 
-Audit date: 2026-11-18
-Scope: checked-in application source, build configuration, database models, API routes, persistence adapters, desktop sidecar, documentation, and generated desktop build artifacts. The implementation now includes automated API coverage; external Oracle, live GitHub/AI credentials, and clean-machine installer workflows remain environment-dependent.
+Audit refreshed: 2026-11-18. This report reflects the current repository, not
+the original baseline. Feature claims below are limited to checked-in source
+and automated checks. External providers and a clean-machine install have not
+been verified unless explicitly stated.
 
-## Executive summary
+## Architecture
 
-ReqTrace has grown into a functional offline-first project, requirements, testing, defect, AI, GitHub, reporting, and quality-checking application. It has a React 19 + TypeScript frontend, Tauri 2 Windows desktop wrapper, Python FastAPI sidecar, SQLAlchemy models, local SQLite persistence, an Oracle `python-oracledb` adapter, a browser cache/outbox, and NSIS packaging. Some enterprise deployment and live external-service paths remain unverified or incomplete.
+- React 19, TypeScript, Vite, and React Router form the UI; Tauri 2 packages
+  the Windows desktop app.
+- Python FastAPI and synchronous SQLAlchemy provide the local API and future
+  Oracle API. PyInstaller bundles the local sidecar.
+- SQLite is the local durable database. Oracle support uses `python-oracledb`
+  and Alembic migrations. The browser also has a local cache and write outbox.
+- AI-compatible provider calls and GitHub API requests run on the Python
+  server; their credentials are not included in browser responses.
 
-The current release is centered on local project workflows. Team authentication and public deployment controls remain required before shared Oracle hosting; live external service paths require credentials and provider setup.
+## Module status
 
-## What is implemented
-
-- **Projects:** create and select project workspaces. Project data is stored in the client cache and sent to the local API when available.
-- **Requirements:** create drafts from entered text, filter by status, search text, edit drafts, submit for review, approve/reject, and display original wording/source metadata. The API stores records and appends audit/outbox rows.
-- **Persistence:** browser `localStorage` cache and retry outbox; the desktop API defaults to a durable per-user SQLite file. The API exposes health, project list/create, requirement list/create/update, and audit-list endpoints.
-- **Oracle adapter:** SQLAlchemy is configured for Oracle through `python-oracledb`, with optional Thick-mode initialization. Oracle schema creation is an explicit `app.init_db` action; the normal server startup only auto-creates tables in local mode.
-- **Desktop shell:** Tauri starts a packaged loopback API sidecar in production. The sidecar binary exists at the expected target-triple path, is ignored by Git as a generated artifact, and is referenced by `externalBin` and the shell capability. A successful NSIS installer artifact exists from 2026-11-17.
-- **Responsive styling:** CSS has desktop/tablet/mobile breakpoints and reduced-motion handling. On narrow screens, the sidebar collapses to icon-only navigation.
-- **Real overview metrics:** the three overview counts are computed from the current project's actual requirement records. There are no test execution, coverage, or defect metrics to report yet.
-
-## Findings by area
-
-| Area | Audited state | Findings / risk | Priority |
-|---|---|---|---|
-| Frontend architecture | React + TypeScript + Vite, React Router 7; one large `src/App.tsx` and one global CSS file | Core features are concentrated in a monolithic component. There is no component/design-token layer for the requested enterprise interface. | P2 |
-| Routes and navigation | `/`, `/requirements`, `/intake`, `/project`, `/new-project` | Catch-all route renders Overview for unknown URLs, which masks route errors. No route exists for the other requested modules. Project settings is informational only. | P1 |
-| Requirements | Create/list/edit, review, soft-delete, filter/sort/paginate, validated CSV import/export, comments, version history, requirement links | Bulk update and Excel import remain open. `source=Document` for general intake still records a source label and manually entered text; files are not stored or parsed. | P1 |
-| Requirement review | Draft → Under review → Approved/Rejected path in UI/API | Review writes are optimistic in the client; there is no visible failure/retry detail tied to a specific record. Approved/rejected records are intentionally read-only in this phase. | P1 |
-| Dashboard | Real project/requirement counts, persisted case/run/defect metrics, requirement status distribution, recent audit activity, refresh | No date filters, trend charts, or report export yet. API-backed metrics explicitly show unavailable when offline. | P2 |
-| Backend/API | FastAPI + synchronous SQLAlchemy session dependencies | Eight routes total including root/health. No auth, authorization, rate limiting, request IDs, structured application logging, or explicit API error envelope. API CRUD errors can surface as generic client errors. This is safe only while bound to loopback; do not expose Oracle mode on a network without the planned access controls. | P0 for shared deployment |
-| Database/schema | Four models/tables: projects, requirements, audit events, sync outbox | No users/organizations, requirement versions/dependencies/comments, AI analyses, traceability links, test suites/cases/executions, defects, GitHub records, conversations, or automation tables. `alembic` is a dependency but there is no migration environment or revision history; `create_all` does not upgrade existing schemas. SQLite foreign-key enforcement is not explicitly enabled. | P1 |
-| Local cache/synchronization | localStorage recovery data plus queued POST/PATCH writes; 15-second online retry | A permanently invalid first outbox item blocks later writes because flush stops at the first error. There are no deletes/conflict-resolution policies or server-side sync API. This is single-user/local-first, not team synchronization. | P1 |
-| Oracle | `oracle+oracledb`, environment-based settings, setup SQL and explicit schema initializer | No schema migrations or authenticated team API yet. The setup SQL contains a password placeholder by design; secrets must remain in ignored `.env`/environment variables. | P1 for team use |
-| AI | No model/provider client or server endpoints | Requirement analysis, generation, grounded assistant, structured validation, fallback, history, and key management are absent. Current conversation intake explicitly captures text without AI. | P1 |
-| GitHub | Server-side read-only token integration; manual repo sync for issues, PRs, commits, branches; persisted requirement links | No OAuth flow, webhook, write actions, or external credential verification. Sync imports first 100 records per category. | P1 |
-| Traceability/testing/defects | Requirement-link matrix, test cases and manual runs, AI test suggestions, defect register | Full multi-entity graph, automated execution, suites/assignment and richer defect workflow remain open. | P1 |
-| Reports/automation | No report or automation implementation | No scheduled jobs, execution history, exports, or rule controls. | P2 |
-| Security/privacy | Secrets are excluded by `.gitignore`; local sidecar defaults to loopback; React escapes rendered values | No authentication/RBAC/CSRF/rate limiting or file-upload validation exists. SQLite and browser cache are not encrypted. Do not host the current API publicly or accept untrusted document uploads. | P0 for shared deployment |
-| UI/UX/accessibility | Light green/white visual system; compact controls and small 8–11px text in many areas | Current palette differs from the requested charcoal/navy/violet direction. No reusable toast/skeleton/error components. Drawer lacks dialog/focus-management behavior; icon-only mobile nav lacks visible labels. Mobile is compressed navigation rather than a true expandable drawer. | P2 |
-| Performance/scale | Client fetches all projects and all requirements for every project; periodic sync | Fine for a small local MVP, but unpaginated endpoints and full-record polling will not scale to a large team workspace. | P2 |
-| Tests/quality | No tracked test/spec files or test runner configuration found | No automated coverage for API rules, persistence/outbox behavior, route rendering, migration upgrades, sidecar startup, or packaging. A prior frontend/Tauri/NSIS build succeeded, but this does not validate those workflows end to end. | P1 |
-| Packaging/configuration | `desktop:build` bundles FastAPI with PyInstaller before `tauri build`; Tauri references the target-specific sidecar | The generated sidecar and NSIS artifact are present locally. A clean-machine install and data-retention/upgrade path have not been verified. PyInstaller rebuild and application start must be part of release verification. | P1 |
+| Module | Current implementation | Verified status / remaining work |
+|---|---|---|
+| Navigation and routes | Overview, projects, requirements, intake, project settings, traceability, tests, defects, AI, assistant, GitHub, reports, automation, and not-found route | Routes are implemented in `src/App.tsx`; automated browser route/form coverage is absent. No dedicated user settings or authentication route. |
+| Dashboard | Project and requirement KPIs, test/run/defect metrics, status distribution, recent audit activity, refresh | Uses persisted API data. Date filters, trend charts, and a richer activity feed remain open. |
+| Requirements | CRUD/review, soft delete, filtering, sorting, pagination, CSV import/export, bulk priority, history, comments, R-R relationships | Persisted API behavior is tested. Excel/PDF export, tags, assignment, and generalized bulk editing remain open. Document intake stores a source reference and manually entered text; it does not parse or upload the selected file. |
+| AI intelligence | Structured requirement analysis, history, heuristic fallback, criteria recommendations, reviewable test suggestions | Fallback/schema behavior is tested. Live provider behavior needs credentials and has not been verified. Duplicate/contradiction analysis across the corpus and accept/reject/edit for all suggestion types remain open. |
+| Traceability | Requirement relationship links, test cases, latest runs, defects, GitHub requirement references, orphan/test coverage, failed case metrics | API and UI matrix implemented; API checks cover relationship and test/defect data. Design components and development task references are not modeled; no graph visualization. |
+| Test management | Manual case CRUD, requirement links, ordered steps, AI suggestions, execution status/history | API checks cover cases, runs, and suggestion persistence behavior. Test suites, assignment, priorities/types, attachments, and automated execution remain open. |
+| Defects | Creation, severity/status, requirement and case links | Core API behavior tested. Assignment, comments, reproduction fields, attachments, and full resolution history remain open. |
+| GitHub | Server token configuration, manual read-only import of repository metadata/issues/PRs/commits/branches, requirement links | Mocked provider path and token non-disclosure tested. Live account access is unverified. OAuth, webhook, pagination beyond the first 100 items per endpoint, and token vaulting are absent. |
+| Assistant | Project-scoped stored conversations, retrieval from project records, cited sources, local fallback | API tests cover fallback/history/scoping. Live AI calls, streaming, regenerate, copy, and richer context selection are unverified or absent. |
+| Reports | Persisted requirement, test execution, and defect views; CSV export | CSV path is implemented. PDF/XLSX, AI analysis report, filters, and scheduled reports remain open. |
+| Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
+| Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite and Oracle dialect support | SQLite migration and packaged-sidecar smoke checks pass. A live Oracle upgrade/rollback and backup/restore are unverified. |
+| UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
+| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events | **No authentication, authorization/RBAC, rate limiting, or CSRF defense is implemented. Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
+| Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest milestone: 17 backend tests passed; `tsc --noEmit` passed; Windows NSIS build passed. One Starlette/httpx deprecation warning remains. No frontend E2E suite or clean-machine installer verification. |
 
 ## Route inventory
 
-| Path | Current behavior | Status |
-|---|---|---|
-| `/` | Project overview with counts/workflow/recent requirements | Implemented |
-| `/projects` | Switch between saved workspaces and create projects | Implemented |
-| `/requirements` | Search/filter/list and review drawer | Partial |
-| `/intake` | Manual/conversation text capture; document metadata + manually entered text | Partial; no parser/upload/AI |
-| `/project` | Read-only active project details | Partial |
-| `/new-project` | Create a project | Implemented |
-| `/traceability` | Requirement relationships, linked test cases and latest executions, defects, imported GitHub references, requirement-link coverage and test coverage | Implemented from project-scoped API data; code/design/task artifact types are not modeled |
-| `/tests` | Create/list cases, record actual results by run status, inspect execution history | Implemented for manual execution; test suites/assignment remain outstanding |
-| `/defects` | Create and list defects; change issue status | Implemented; richer editing/assignment is not yet available |
-| `/ai` | Requirement analysis, saved history, clearly labeled local heuristic fallback | Implemented; live provider calls need a server-side AI key and have not been externally verified |
-| `/assistant` | Saved project conversations, retrieved-record answers, and source links | Implemented with local-search fallback; live provider path needs server-side key; streaming and regenerate remain open |
-| `/github` | Server-configured repository import and requirement links to issues, PRs, commits, branches | Implemented for manual read-only sync; requires `GITHUB_TOKEN`; OAuth and webhook sync remain open |
-| `/reports` | Requirement progress, test execution, and defect reports with safe CSV export | Implemented; PDF/XLSX and date-filtered analytics remain open |
-| `/automation` | Enable/disable and manually run read-only project quality checks with stored history | Implemented for three checks; scheduling, notifications, permissions, and background triggers remain open |
-| Any other path | Dedicated not-found view with navigation back into the app | Implemented |
+| Path | Behavior |
+|---|---|
+| `/` | Persisted workspace overview |
+| `/projects`, `/new-project` | Project list/switching and creation |
+| `/requirements` | Search, filter, sort, page, import/export, bulk priority, edit/review/history/comments |
+| `/intake` | Manual, conversation, and document-referenced text intake; document parsing is not implemented |
+| `/project` | Active project details |
+| `/traceability` | Requirement, test, run, defect, and GitHub reference matrix |
+| `/tests` | Test case creation, suggestion review, manual runs, and history |
+| `/defects` | Defect creation and status changes |
+| `/ai` | Requirement analysis and persisted results |
+| `/assistant` | Project-record Q&A with conversation history and citations |
+| `/github` | Read-only repository sync and requirement reference linking |
+| `/reports` | Persisted project reports and CSV export |
+| `/automation` | Manual quality-rule configuration and run history |
+| Any unmatched path | Not-found page |
 
-## No UI-only features to misrepresent
+## Final implementation summary
 
-The current UI contains explicit copy that document parsing and AI are not connected, and the implementation plan says remote team sync/authentication are future work. That honesty is good and should be preserved. The document chooser does not persist its file; it preserves only a source label/reference and the user-entered text. The interface should not be described as having GitHub sync, AI extraction, tests, coverage, defects, or reports until those flows have a working API and persistence path.
+| Module | Previous state | Changes in this implementation | Final status |
+|---|---|---|---|
+| Dashboard | Basic project/requirement view | Persisted requirement, test/run, defect, status, and activity metrics | Implemented for current data; filters and trend charts remain open |
+| Requirements | Manual create/list/review | CRUD/review, filters/sort/paging, CSV import/export, bulk priority, versions, comments, R-R links | Core workflows tested; Excel/PDF, tags, assignment remain open |
+| AI Intelligence | No provider analysis | Structured analysis, stored history, fallback, criteria recommendations, reviewable test suggestions | Fallback/schema tested; live provider and broader AI checks unverified |
+| Traceability | Requirement-only links | Matrix includes linked tests, latest runs, defects, GitHub references, relationship/test coverage | Implemented/tested; design and task refs absent |
+| Test Management | No persisted cases | Case CRUD, AI suggestions, manual execution history | Core API tested; suites, assignment, automation remain open |
+| GitHub | No integration | Server-side token, manual read-only import and requirement links | Mock tested; live account, OAuth, webhooks unverified/absent |
+| AI Assistant | No grounded assistant | Project-record retrieval, citations, stored conversations, local fallback | API fallback/history/scoping tested; live provider and streaming incomplete |
 
-## Implementation order
+This summary does not imply production readiness. The security and verification
+gates below still apply.
 
-1. **Harden the Phase 1 core:** fix unknown-route handling, expose save/sync errors, make sidecar startup and persistence observable, and add API/frontend tests for the existing workflows.
-2. **Schema evolution and requirement lifecycle:** introduce Alembic-compatible migrations without dropping current SQLite/Oracle records; add requirement deletion with confirmation, history UI, sorting/pagination, and CSV import/export with validation.
-3. **Traceability domain:** add versioning, dependencies, trace links and audit history; implement orphan/coverage queries and a matrix based on persisted data.
-4. **Test and defect management:** add persisted suites/cases/steps/executions/defects and requirement/test linking, then wire functional routes and history.
-5. **Access-controlled team API and GitHub:** implement users/organizations/roles and secret handling before exposing remote Oracle; add OAuth/repository/reference sync with explicit success state.
-6. **AI intelligence/assistant:** add provider configuration on the server, validated structured outputs, grounded context/source references, analysis history, and user-reviewed accept/reject/edit flows. AI-unavailable fallback must be testable.
-7. **Dashboard, reports, automation, and visual redesign:** use real query-backed records, exports, rule execution history, reusable design tokens/components, accessibility, and mobile navigation.
-8. **Release verification:** exercise routes/forms/API/migrations/persistence/sidecar/installer on clean data, run automated checks, and document credentials or external services still needed.
+## Risks and release boundary
 
-## Current release boundary
+1. The largest release blocker is missing authentication and authorization.
+   Oracle mode is a database adapter, not a secure multi-user service. Keep the
+   API bound to loopback until access control, deployment hardening, and
+   authorization tests are implemented.
+2. Oracle connectivity and schema upgrades were not exercised against a live
+   Oracle instance in this environment. `python-oracledb` Thin mode supports
+   newer Oracle versions; Oracle 11g requires a compatible Instant Client and
+   Thick mode.
+3. No AI or GitHub secret is present for live provider tests. Mocked/fallback
+   tests do not prove live credentials, quotas, account permissions, or
+   provider compatibility.
+4. Full traceability is not available for design components or development
+   tasks. Test suites, user assignment, broader defect workflows, PDF/XLSX,
+   automation scheduling, and file parsing remain incomplete.
+5. The desktop packaging build passed locally, but installation, upgrade,
+   persistence retention, signing, and uninstall behavior need a clean Windows
+   machine test.
 
-The app is usable as a local project/requirement intake and review prototype when its desktop sidecar is packaged and started. It is not a secure multi-user service or a complete AI/GitHub traceability product. The README and implementation plan already make this distinction; deployment must continue to respect it.
+## Verification record
 
-## Progress after the baseline audit
+For the cross-module traceability milestone, verification ran:
 
-The following first-phase changes are now in the working tree:
+- `npm exec tsc -- --noEmit` — passed.
+- `backend/.venv/Scripts/python.exe -m pytest tests -q` — 17 passed, one
+  Starlette/httpx deprecation warning.
+- `npm run desktop:build` — passed; generated a 28.88 MiB Windows NSIS
+  installer and bundled API sidecar.
+- Packaged-sidecar smoke coverage runs in the backend suite; suite passed after
+  packaging as well.
 
-- Unknown paths render a dedicated 404 view; the breadcrumb also reports “Not found.”
-- The implemented UI now uses the charcoal/navy/violet palette, clearer text sizes, dark form controls, visible focus outlines, and named icon-only mobile links.
-- Local API startup applies Alembic revisions. The bootstrap uses `checkfirst` and does not drop existing tables; revision `20261117_0002` adds the requirement soft-delete column while preserving rows.
-- Requirement lists now support priority filtering, sorting, 20-row pagination, CSV export, and a delete action that removes records from active lists while retaining the record and audit event in the database.
-- The `/traceability` route now persists requirement-to-requirement `depends_on`, `relates_to`, and `conflicts_with` links, rejects self/duplicate/cross-project relationships, records link changes in the audit log, and reports linked/orphan requirements. Its percentage is relationship-link coverage, not test coverage.
-- Storage/API failures appear in an accessible status banner and retain the browser outbox for retry.
-- `backend/tests` covers project/requirement API behavior, review state validation, unique keys, delete/audit behavior, traceability links, fresh schema creation, legacy data preservation, and the packaged-sidecar health/migration smoke check.
-- Verification completed for this slice: 9 backend tests passed; TypeScript check passed; Vite production build and Windows sidecar/NSIS packaging passed with traceability included. The installer is 28.82 MiB. The test suite currently emits one Starlette/httpx deprecation warning.
-
-Remaining gaps include AI, GitHub, full multi-entity traceability, test management, defects, team authentication, reports, and automation. Oracle schema upgrade behavior is implemented through the same Alembic environment but has not been exercised against a live Oracle server as part of this slice.
-
-## Additional traceability progress
-
-The traceability slice is included in the refreshed Windows installer. It has
-requirement-link persistence, project matrix/link CRUD API routes,
-same-project/self/duplicate validation, audit/outbox records, and linked/orphan
-views. The packaged sidecar smoke check passed and left no test processes
-running. Live Oracle verification and the remaining product modules are still
-open work.
-
-## Test and defect progress
-
-Alembic revision `20261117_0004` adds persisted test cases and defects. The API
-validates requirement/test references against the active project, assigns
-readable IDs, records audit and outbox events, and supports defect status
-changes. The `/tests` and `/defects` screens create and list those records.
-Automated runs and broader multi-entity trace views remain open. Manual
-execution evidence is now persisted. The refreshed installer and
-packaged-sidecar smoke check passed with the test execution migration included.
-
-## AI requirement intelligence progress
-
-Alembic revision `20261117_0005` persists validated analysis results and
-provider labels. The `/ai` route analyzes a selected requirement, shows saved
-history, distinguishes AI provider output from the local heuristic fallback,
-and lets the user add recommended acceptance criteria to editable requirements.
-Provider configuration is server-side (`AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`)
-and never returned to the client. Fallback persistence and output validation
-are covered by the backend suite; an external provider request has not been
-verified because no provider credential was supplied in this workspace.
-The test management page also generates reviewable, unsaved case suggestions
-from a selected requirement. A user explicitly saves accepted cases.
-
-## Grounded assistant progress
-
-Alembic revision `20261117_0007` adds project conversations and message history.
-The `/assistant` route retrieves requirement, case, and defect records from the
-selected project, stores user/assistant messages, and returns source references
-with each answer. Without a configured provider, it uses local term matching and
-states that limitation. Conversation access is project-scoped. Fallback,
-history, source references, and cross-project rejection pass backend tests.
-External provider calls and streaming are not verified/implemented.
-
-## GitHub integration progress
-
-Alembic revision `20261117_0008` adds repository, imported-record, and
-requirement-link tables. The `/github` route reports credential configuration,
-lists repositories visible to a server-side fine-grained token, imports the
-first 100 issues, pull requests, commits, and branches per category, and lets
-users link imported records to requirements. Credentials never leave FastAPI.
-The API tests use a mocked GitHub provider and verify token non-disclosure,
-record persistence, and requirement linking. A live GitHub call has not been
-verified because no token was configured. OAuth, webhooks, pagination beyond
-100 per endpoint, and automatic background sync remain outstanding.
+These checks do not substitute for live Oracle/provider testing, browser E2E,
+accessibility review, or clean-machine installation.

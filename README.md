@@ -1,40 +1,50 @@
 # ReqTrace AI
 
-ReqTrace AI is being built as an offline-first Windows desktop application for
-individuals and teams. The client is React + TypeScript in a Tauri 2 shell. A
-local Python + FastAPI sidecar owns the per-user SQLite workspace, so records
-persist when the app closes and work without a network connection. A separate
-Oracle-backed FastAPI deployment will become the shared team data service.
+ReqTrace AI is an offline-first requirement traceability and software testing
+workspace. The Windows desktop app uses React + TypeScript in Tauri 2 and a
+Python + FastAPI sidecar. The local API persists to SQLite; Oracle is supported
+by the same SQLAlchemy/Alembic backend for development and future team hosting.
 
-The current implementation starts that foundation with project and requirement
-intake, human review, persistent local SQLite storage, and an Oracle database
-adapter. Team authentication and client-to-server synchronization are next; the
-local API is loopback-only until those access controls exist.
+Current routes cover projects, requirements and review, test cases and manual
+runs, defects, AI analysis, grounded project Q&A, read-only GitHub imports,
+traceability, reports, and manual quality automation. See
+[the audit and status report](AUDIT_REPORT.md) for tested scope and remaining
+work, and [the implementation plan](IMPLEMENTATION_PLAN.md) for architecture.
 
-## Start development
+## Development setup
 
-1. Follow [backend setup](backend/README.md) to create a Python virtual
-   environment and start the local API.
-2. Run `npm run dev` from this folder for the browser preview, or
-   `npm run desktop:dev` for the Tauri window once Rust, the MSVC C++ build
-   tools, and WebView2 are installed. The desktop command starts the local
-   Python API and Vite together.
-3. API documentation is at `http://127.0.0.1:8000/api/docs`.
+1. Install Node.js/npm, Python 3.13, Rust with the MSVC C++ build tools, and
+   WebView2 for Windows desktop development.
+2. Follow [backend setup](backend/README.md) to create a Python environment and
+   start the API.
+3. From the repository root, run `npm install`, then `npm run dev` for the
+   browser preview or `npm run desktop:dev` for Tauri.
+4. API docs are available at `http://127.0.0.1:8000/api/docs` while the local
+   API is running.
 
-`npm run desktop:build` packages the FastAPI sidecar with PyInstaller and then
-builds the Windows installer. It writes the installer under `src-tauri/target`;
-the bundled local database stays in the user's Windows application data folder.
+Build the Windows installer with `npm run desktop:build`. This packages the
+Python sidecar with PyInstaller and creates the NSIS installer under
+`src-tauri/target/release/bundle/nsis/`. Local records are kept in
+`%LOCALAPPDATA%\ReqTrace\data` by default.
 
-The product scope and delivery sequence are in
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+## Checks
 
-The latest source review is recorded in [AUDIT_REPORT.md](AUDIT_REPORT.md).
-Run backend checks from `backend`:
+Run the backend checks from `backend` after installing `requirements-dev.txt`:
 
 ```powershell
-python -m pip install -r requirements-dev.txt
 python -m pytest -q tests
 ```
 
-The packaged sidecar smoke check runs when `desktop:build` has generated the
-Windows sidecar.
+Run the frontend type check from the repository root:
+
+```powershell
+npm exec tsc -- --noEmit
+```
+
+## Security and deployment boundary
+
+The local API defaults to loopback. Authentication, RBAC, and rate limiting
+have not been implemented. **Do not expose this API or Oracle mode on a
+network.** AI and GitHub credentials belong only in the backend environment;
+never put them in frontend configuration or source control. Oracle adapter
+support does not by itself provide a production-ready team service.
