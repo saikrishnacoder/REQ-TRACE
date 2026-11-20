@@ -212,10 +212,10 @@ matrix; it does not model design components or development task records.
 ### Delivery gates still open
 
 1. **Secure shared service (P0):** auth now provides a bootstrap admin, PBKDF2
-   password hashes, expiring HMAC bearer tokens, global roles, project
-   memberships, filtered project lists, record-route guards, account/member
-   admin APIs, and per-process request limits. Still implement password reset,
-   immediate token revocation, distributed rate limiting, organization
+   password hashes, expiring HMAC bearer tokens, database-verified current
+   account roles/status, project memberships, filtered project lists,
+   record-route guards, account/member admin APIs, and per-process request
+   limits. Still implement password reset, distributed rate limiting, organization
    tenancy, audit actor attribution, global account lifecycle UI, and
    deployment hardening.
    Audit every API family and verify Oracle deployment before network access.
@@ -230,6 +230,24 @@ matrix; it does not model design components or development task records.
    AI/GitHub integrations with least-privilege test credentials, structured
    logs, and scale behavior. Credentials and an Oracle environment were not
    available during this audit.
+
+## Product audit slice (2026-11-20)
+
+The browser smoke audit rendered all current application routes and the
+not-found route without console errors. The project gained a first persisted-
+data knowledge graph for requirements, tests, defects, and GitHub references,
+with search, entity filtering, zoom, selection, and relationship details.
+Design/task/objective/evidence/risk/document/decision records, graph dragging,
+path highlighting, export, and automated browser coverage remain open.
+
+The API now resolves account activity and role from the database on each
+authenticated request so deactivation and role changes revoke old token
+permissions immediately. CORS origins are configurable through
+`CORS_ALLOWED_ORIGINS`. TypeScript, Vite build, production npm audit, Python
+dependency checks, and all 21 backend tests pass. This is not deployment
+approval: no domain or server target was identified, the Hostinger account
+lookup did not return, and the existing shared-service security and live
+Oracle gates remain open.
 
 These are gates, not completed deliverables. The current implementation is a
 local-first functional build and must not be represented as an authenticated

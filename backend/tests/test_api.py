@@ -30,10 +30,12 @@ def client(tmp_path) -> Generator[TestClient, None, None]:
             session.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.session_factory = test_session
     # Avoid entering the app lifespan so the suite never migrates the user's
     # configured database. Routes use only the isolated dependency override.
     yield TestClient(app)
     app.dependency_overrides.clear()
+    app.state.session_factory = main.SessionLocal
     engine.dispose()
 
 
@@ -75,7 +77,6 @@ def test_project_and_requirement_review_flow_is_persisted(client: TestClient) ->
     listed = client.get(f"/api/v1/projects/{project['id']}/requirements")
     assert listed.status_code == 200
     assert listed.json()[0]["status"] == "Approved"
-
     audit = client.get(f"/api/v1/projects/{project['id']}/audit")
     assert audit.status_code == 200
     assert {event["action"] for event in audit.json()} == {
@@ -90,6 +91,19 @@ def test_project_and_requirement_review_flow_is_persisted(client: TestClient) ->
     comment = client.post(f"/api/v1/requirements/{requirement['id']}/comments", json={"content": "Verify timeout behavior."})
     assert comment.status_code == 201
     assert client.get(f"/api/v1/requirements/{requirement['id']}/comments").json()[0]["content"] == "Verify timeout behavior."
+
+
+def test_cors_allows_local_frontend_and_rejects_unconfigured_origin(client: TestClient) -> None:
+    allowed = client.options("/api/v1/health", headers={
+        "Origin": "http://localhost:3000",
+        "Access-Control-Request-Method": "GET",
+    })
+    denied = client.options("/api/v1/health", headers={
+        "Origin": "https://untrusted.example.test",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert allowed.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert denied.headers.get("access-control-allow-origin") is None
 
 
 def test_review_state_machine_rejects_skipping_review(client: TestClient) -> None:
@@ -378,6 +392,7 @@ def test_authenticated_api_tokens_enforce_read_and_admin_roles(client: TestClien
     session_generator = app.dependency_overrides[get_db]()
     db = next(session_generator)
     db.add(models.UserAccount(id="viewer-user", email="viewer@example.test", password_hash=hash_password("test-password-123"), role="Viewer", active=True))
+    db.add(models.UserAccount(id="admin-user", email="admin@example.test", password_hash=hash_password("admin-password-123"), role="Admin", active=True))
     db.commit()
     db.close()
     session_generator.close()
@@ -439,13 +454,21 @@ def test_authenticated_api_tokens_enforce_read_and_admin_roles(client: TestClien
     assert client.get(f"/api/v1/requirements/{editor_requirement['id']}/comments", headers=viewer_headers).status_code == 403
     member_actions = {event["action"] for event in client.get(f"/api/v1/projects/{editor_project_id}/audit", headers=editor_headers).json()}
     assert {"project_member_added", "project_member_removed"} <= member_actions
+    demoted = client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"role": "Viewer"}, headers={"Authorization": f"Bearer {admin_token}"})
+    assert demoted.status_code == 200 and demoted.json()["role"] == "Viewer"
+    assert client.get("/api/v1/auth/me", headers=editor_headers).json()["role"] == "Viewer"
+    assert client.post(f"/api/v1/projects/{editor_project_id}/requirements", json={}, headers=editor_headers).status_code == 403
     disabled = client.patch(f"/api/v1/auth/users/{account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {admin_token}"})
     assert disabled.status_code == 200 and disabled.json()["active"] is False
+    assert client.get("/api/v1/auth/me", headers=editor_headers).status_code == 401
     assert client.post("/api/v1/auth/login", json={"email": "editor@example.test", "password": "editor-password-123"}).status_code == 401
     admin_account = client.post("/api/v1/auth/users", json={"email": "second-admin@example.test", "password": "admin-password-123", "role": "Admin"}, headers={"Authorization": f"Bearer {admin_token}"})
     assert admin_account.status_code == 201
-    assert client.patch(f"/api/v1/auth/users/{admin_account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 409
-    for _ in range(2):
+    second_admin_token = client.post("/api/v1/auth/login", json={"email": "second-admin@example.test", "password": "admin-password-123"}).json()["accessToken"]
+    assert client.patch("/api/v1/auth/users/admin-user", json={"role": "Editor"}, headers={"Authorization": f"Bearer {admin_token}"}).status_code == 200
+    assert client.patch(f"/api/v1/auth/users/{admin_account.json()['id']}", json={"active": False}, headers={"Authorization": f"Bearer {second_admin_token}"}).status_code == 409
+    main._rate_windows.clear()
+    for _ in range(5):
         assert client.post("/api/v1/auth/login", json={"email": "viewer@example.test", "password": "wrong-password"}).status_code == 401
     limited = client.post("/api/v1/auth/login", json={"email": "viewer@example.test", "password": "wrong-password"})
     assert limited.status_code == 429

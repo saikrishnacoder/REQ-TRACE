@@ -276,7 +276,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/projects' ? 'Projects' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/projects' ? 'Projects' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/knowledge-graph' ? 'Knowledge graph' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -310,6 +310,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/reports" aria-label="Reports and analytics" title="Reports and analytics" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><BarChart3 size={17} /><span>Reports</span></NavLink>
           <NavLink to="/automation" aria-label="Automation" title="Automation" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Workflow size={17} /><span>Automation</span></NavLink>
           <NavLink to="/traceability" aria-label="Traceability" title="Traceability" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Traceability</span></NavLink>
+          <NavLink to="/knowledge-graph" aria-label="Knowledge graph" title="Knowledge graph" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Network size={17} /><span>Knowledge graph</span></NavLink>
           <NavLink to="/tests" aria-label="Test cases" title="Test cases" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ListChecks size={17} /><span>Test cases</span></NavLink>
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
           <NavLink to="/intake" aria-label="Intake" title="Intake" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Inbox size={17} /><span>Intake</span></NavLink>
@@ -343,6 +344,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/reports" element={<ReportsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/automation" element={<AutomationPage project={props.project} />} />
             <Route path="/traceability" element={<TraceabilityPage project={props.project} requirements={props.requirements} createLink={props.createRequirementLink} deleteLink={props.deleteRequirementLink} />} />
+            <Route path="/knowledge-graph" element={<KnowledgeGraphPage project={props.project} requirements={props.requirements} />} />
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/intake" element={<IntakePage project={props.project} createRequirement={props.createRequirement} />} />
@@ -841,6 +843,92 @@ function TraceabilityPage({ project, requirements, createLink, deleteLink }: {
           return <span className="trace-related-item" key={link.id}><span>{link.relationshipType.replaceAll('_', ' ')}</span><b>{other?.code ?? 'Unavailable record'}</b>{link.sourceRequirementId === item.id && <button className="icon-button danger-icon" aria-label={`Remove relationship to ${other?.code ?? otherId}`} title="Remove relationship" disabled={busy} onClick={() => void removeLink(item.id, link.id)}><X size={13} /></button>}</span>;
         })}</div> : <span className="trace-no-links">No requirement links</span>}</td><td>{testCases.length ? <div className="trace-related-list">{testCases.map((testCase) => { const latest = latestExecutionByCase.get(testCase.id); return <span className="trace-related-item" key={testCase.id}><b>{testCase.code}</b><span>{testCase.title}</span><em className={`test-run-pill ${(latest?.status ?? 'Not run').toLowerCase().replace(' ', '-')}`}>{latest?.status ?? 'Not run'}</em></span>; })}</div> : <span className="trace-no-links">No linked test case</span>}</td><td>{linkedDefects.length ? <div className="trace-related-list">{linkedDefects.map((defect) => <span className="trace-related-item" key={defect.id}><b>{defect.code}</b><span>{defect.title}</span><em>{defect.status}</em></span>)}</div> : <span className="trace-no-links">No linked defects</span>}</td><td>{github.length ? <div className="trace-related-list">{github.map((record) => <a className="github-matrix-link" key={record.id} href={record.htmlUrl} target="_blank" rel="noreferrer">{record.recordType} #{record.externalId} <ArrowUpRight size={12} /></a>)}</div> : <span className="trace-no-links">No GitHub reference</span>}</td><td>{snapshot ? untestedIds.has(item.id) ? <span className="trace-state orphan">Untested</span> : <span className="trace-state linked">Covered</span> : <span className="trace-state unknown">Unavailable</span>}{orphanIds.has(item.id) && <small className="trace-substate">No requirement relationship</small>}</td></tr>;
       })}</tbody></table></div>}
+    </section>
+  </div>;
+}
+
+type KnowledgeNodeKind = 'Requirement' | 'Test case' | 'Defect' | 'GitHub';
+interface KnowledgeNode { id: string; label: string; detail: string; kind: KnowledgeNodeKind; x: number; y: number }
+interface KnowledgeEdge { id: string; source: string; target: string; label: string }
+
+function KnowledgeGraphPage({ project, requirements }: { project: Project; requirements: Requirement[] }) {
+  const [snapshot, setSnapshot] = useState<TraceabilitySnapshot | null>(null);
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [kindFilter, setKindFilter] = useState<'All' | KnowledgeNodeKind>('All');
+  const [selectedId, setSelectedId] = useState('');
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => {
+    let active = true;
+    void getTraceability(project.id).then((result) => { if (active) { setSnapshot(result); setError(''); } })
+      .catch(() => { if (active) setError('The graph needs the project traceability API. Requirement nodes remain available from the browser cache.'); });
+    return () => { active = false; };
+  }, [project.id]);
+
+  const graph = useMemo(() => {
+    const records = snapshot?.requirements ?? requirements;
+    const nodeRows: KnowledgeNode[] = [];
+    const edgeRows: KnowledgeEdge[] = [];
+    const place = (items: { id: string; label: string; detail: string; kind: KnowledgeNodeKind }[], x: number) => {
+      items.forEach((item, index) => nodeRows.push({ ...item, x, y: items.length === 1 ? 300 : 54 + index * (492 / Math.max(items.length - 1, 1)) }));
+    };
+    place(records.map((item) => ({ id: item.id, label: item.code, detail: item.title, kind: 'Requirement' as const })), 160);
+    const cases = snapshot?.testCases ?? [];
+    place(cases.map((item) => ({ id: item.id, label: item.code, detail: item.title, kind: 'Test case' as const })), 452);
+    const defects = snapshot?.defects ?? [];
+    place(defects.map((item) => ({ id: item.id, label: item.code, detail: item.title, kind: 'Defect' as const })), 744);
+    const github = snapshot?.githubLinks ?? [];
+    const githubRecords = new Map(github.map((item) => [item.recordId, item]));
+    place([...githubRecords.values()].map((item) => ({ id: item.recordId, label: `${item.recordType} #${item.externalId}`, detail: item.title, kind: 'GitHub' as const })), 920);
+    const nodeIds = new Set(nodeRows.map((item) => item.id));
+    for (const item of snapshot?.links ?? []) if (nodeIds.has(item.sourceRequirementId) && nodeIds.has(item.targetRequirementId)) {
+      edgeRows.push({ id: item.id, source: item.sourceRequirementId, target: item.targetRequirementId, label: item.relationshipType.replaceAll('_', ' ') });
+    }
+    for (const item of cases) if (item.requirementId && nodeIds.has(item.requirementId)) {
+      edgeRows.push({ id: `case-${item.id}`, source: item.requirementId, target: item.id, label: 'verifies' });
+    }
+    for (const item of defects) {
+      const source = item.requirementId ?? item.testCaseId;
+      if (source && nodeIds.has(source)) edgeRows.push({ id: `defect-${item.id}`, source, target: item.id, label: 'tracks issue' });
+    }
+    for (const item of github) if (nodeIds.has(item.requirementId) && nodeIds.has(item.recordId)) {
+      edgeRows.push({ id: `github-${item.id}`, source: item.requirementId, target: item.recordId, label: 'references' });
+    }
+    return { nodes: nodeRows, edges: edgeRows };
+  }, [snapshot, requirements]);
+
+  const visibleNodes = graph.nodes.filter((node) => kindFilter === 'All' || node.kind === kindFilter);
+  const visibleIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleEdges = graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const selected = graph.nodes.find((node) => node.id === selectedId);
+  const matchingIds = new Set(visibleNodes.filter((node) => `${node.label} ${node.detail}`.toLowerCase().includes(query.toLowerCase())).map((node) => node.id));
+  const highlightedIds = new Set(matchingIds);
+  for (const edge of graph.edges) if (matchingIds.has(edge.source) || matchingIds.has(edge.target)) {
+    highlightedIds.add(edge.source); highlightedIds.add(edge.target);
+  }
+  const isHighlighted = (node: KnowledgeNode) => !query.trim() || highlightedIds.has(node.id);
+
+  return <div className="knowledge-graph-page">
+    <div className="welcome-row"><div><div className="eyebrow"><Network size={13} /> PROJECT INTELLIGENCE · {project.key}</div><h1 className="page-heading">Knowledge graph</h1><p className="page-subheading">Explore evidence-backed links between requirements, tests, issues, and imported GitHub records.</p></div></div>
+    {error && <div className="sync-alert" role="status">{error}</div>}
+    <section className="surface knowledge-graph-shell">
+      <div className="knowledge-graph-toolbar"><label className="search-field"><Search size={15} /><input aria-label="Search graph records" placeholder="Search graph records" value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Show<select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}>{['All', 'Requirement', 'Test case', 'Defect', 'GitHub'].map((kind) => <option key={kind}>{kind}</option>)}</select></label><div className="graph-zoom-controls"><button className="button button-secondary button-small" aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(0.65, Number((value - 0.15).toFixed(2))))}>−</button><span>{Math.round(zoom * 100)}%</span><button className="button button-secondary button-small" aria-label="Zoom in" onClick={() => setZoom((value) => Math.min(1.75, Number((value + 0.15).toFixed(2))))}>+</button><button className="button button-secondary button-small" onClick={() => { setZoom(1); setSelectedId(''); }}>Reset</button></div></div>
+      {visibleNodes.length === 0 ? <EmptyState icon={<Network size={18} />} title={query ? 'No matching graph records' : 'No records to connect yet'} text={query ? 'Try another search term or entity type.' : 'Add project requirements to start building traceable connections.'} /> : <div className="knowledge-graph-content">
+        <div className="knowledge-graph-canvas" role="img" aria-label={`Knowledge graph with ${visibleNodes.length} records and ${visibleEdges.length} relationships`}>
+          <svg viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet">
+            <g transform={`translate(${500 - 500 * zoom} ${300 - 300 * zoom}) scale(${zoom})`}>
+              {visibleEdges.map((edge) => { const source = nodeById.get(edge.source); const target = nodeById.get(edge.target); if (!source || !target) return null; return <g key={edge.id} className={`knowledge-edge${query.trim() && !highlightedIds.has(edge.source) ? ' dimmed' : ''}`}><line x1={source.x} y1={source.y} x2={target.x} y2={target.y} /><title>{edge.label}</title></g>; })}
+              {visibleNodes.map((node) => <g key={node.id} className={`knowledge-node kind-${node.kind.toLowerCase().replace(' ', '-')}${selectedId === node.id ? ' selected' : ''}${isHighlighted(node) ? '' : ' dimmed'}`} transform={`translate(${node.x} ${node.y})`} role="button" tabIndex={0} aria-label={`${node.kind}: ${node.label}, ${node.detail}`} onClick={() => setSelectedId(node.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(node.id); } }}>
+                <circle r={node.kind === 'Requirement' ? 27 : 23} /><text className="knowledge-node-label" textAnchor="middle" y="-38">{node.label.length > 20 ? `${node.label.slice(0, 18)}…` : node.label}</text><text className="knowledge-node-detail" textAnchor="middle" y="42">{node.detail.length > 24 ? `${node.detail.slice(0, 22)}…` : node.detail}</text><title>{node.kind}: {node.label} · {node.detail}</title>
+              </g>)}
+            </g>
+          </svg>
+        </div>
+        <aside className="knowledge-graph-details"><div className="eyebrow">GRAPH RECORD</div>{selected ? <><span className={`phase-pill graph-kind-${selected.kind.toLowerCase().replace(' ', '-')}`}>{selected.kind}</span><h2>{selected.label}</h2><p>{selected.detail}</p><div className="settings-line"><span>Connections</span><b>{graph.edges.filter((edge) => edge.source === selected.id || edge.target === selected.id).length}</b></div>{graph.edges.filter((edge) => edge.source === selected.id || edge.target === selected.id).map((edge) => { const related = nodeById.get(edge.source === selected.id ? edge.target : edge.source); return related ? <div className="graph-related-record" key={edge.id}><small>{edge.label}</small><b>{related.label}</b><span>{related.detail}</span></div> : null; })}{selected.kind === 'Requirement' && <Link className="button button-secondary button-small" to="/requirements">Open requirements</Link>}</> : <p>Select a node to inspect its links and record details.</p>}</aside>
+      </div>}
+      <div className="knowledge-graph-legend">{(['Requirement', 'Test case', 'Defect', 'GitHub'] as KnowledgeNodeKind[]).map((kind) => <span key={kind}><i className={`graph-legend-dot kind-${kind.toLowerCase().replace(' ', '-')}`} />{kind}</span>)}<small>{visibleNodes.length} records · {visibleEdges.length} links</small></div>
     </section>
   </div>;
 }

@@ -83,14 +83,10 @@ app = FastAPI(
     lifespan=lifespan,
     dependencies=[Depends(authorize_project_access)],
 )
+app.state.session_factory = SessionLocal
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-        "http://tauri.localhost",
-        "tauri://localhost",
-    ],
+    allow_origins=settings.cors_allowed_origins,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
@@ -129,6 +125,17 @@ async def authenticate_api(request: Request, call_next):
     claims = decode_token(token, settings.auth_token_secret) if scheme.casefold() == "bearer" else None
     if claims is None:
         return JSONResponse(status_code=401, content={"detail": "A valid bearer token is required"}, headers={"WWW-Authenticate": "Bearer"})
+    # Tokens are short-lived, but account changes must take effect immediately.
+    # Resolve the account on each request so a deactivation or role change cannot
+    # leave the old identity and permissions usable until token expiry.
+    try:
+        with request.app.state.session_factory() as db:
+            account = db.get(UserAccount, claims.get("sub"))
+            if account is None or not account.active:
+                return JSONResponse(status_code=401, content={"detail": "The account is inactive or no longer exists"}, headers={"WWW-Authenticate": "Bearer"})
+            claims = {**claims, "email": account.email, "role": account.role}
+    except SQLAlchemyError:
+        return JSONResponse(status_code=503, content={"detail": "Authentication could not be verified"})
     role = claims["role"]
     if request.url.path.startswith("/api/v1/auth/users") and role != "Admin":
         return JSONResponse(status_code=403, content={"detail": "Only administrators can manage user accounts"})

@@ -7,7 +7,7 @@ by the same SQLAlchemy/Alembic backend for development and future team hosting.
 
 Current routes cover projects, requirements and review, test cases and manual
 runs, defects, AI analysis, grounded project Q&A, read-only GitHub imports,
-traceability, reports, and manual quality automation. See
+traceability and its knowledge graph, reports, and manual quality automation. See
 [the audit and status report](AUDIT_REPORT.md) for tested scope and remaining
 work, and [the implementation plan](IMPLEMENTATION_PLAN.md) for architecture.
 
@@ -49,8 +49,11 @@ unauthenticated by default. Admins can create/deactivate accounts and assign
 Editor/Viewer project membership through the API. Project and record routes
 enforce membership, and non-admin project lists are filtered. Project-level
 membership management is available in Project settings. Global account
-lifecycle UI, password reset, immediate token revocation, distributed rate
-limiting, and organization tenancy remain incomplete. **Do not expose this API
+lifecycle UI, password reset, distributed rate limiting, and organization
+tenancy remain incomplete. Existing API tokens now honor account deactivation
+and role changes immediately. For a separate frontend origin, configure
+`CORS_ALLOWED_ORIGINS` in the backend and `VITE_API_URL` at frontend build
+time. **Do not expose this API
 or Oracle mode on a shared network.**
 Oracle mode reads persisted server records and does not automatically import
 projects or queued changes from the browser cache.

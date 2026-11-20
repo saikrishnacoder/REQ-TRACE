@@ -66,7 +66,15 @@ server start, also set `AUTH_BOOTSTRAP_EMAIL` and a unique
 account if the user table is empty. Bootstrap credentials are ignored after
 that first account exists. Roles currently provide broad API guards: Viewer is
 read-only; Editor can create/update; Admin can also delete. Tokens expire after
-60 minutes by default and are held in browser session storage.
+60 minutes by default and are held in browser session storage. Current account
+status and role are checked on each request, so deactivation and role changes
+apply to existing tokens immediately.
+
+For a separately hosted frontend, set `CORS_ALLOWED_ORIGINS` to a JSON array
+containing only exact trusted HTTPS frontend origins, for example
+`["https://reqtrace.example.com"]`. Set the matching frontend build variable
+`VITE_API_URL` to the API base URL ending in `/api/v1`. Keep both services on
+HTTPS and require authentication; local mode is unauthenticated by default.
 
 Admins can list accounts, create users with one of the three roles, and
 deactivate accounts via `/api/v1/auth/users`. The login endpoint permits five
@@ -82,8 +90,8 @@ record routes. The desktop Project settings page exposes these membership
 actions to Admins; global account lifecycle remains API-only.
 
 This remains an initial authentication foundation, not a complete shared-
-service security boundary. Organization tenancy, password reset, immediate
-token revocation, distributed rate limiting, CSRF controls, exhaustive route
+service security boundary. Organization tenancy, password reset, distributed
+rate limiting, CSRF controls, exhaustive route
 authorization testing, and deployment hardening remain incomplete. **Do not
 bind the API to a public or
 shared network.** Keep `.env` out of source control and use a secret manager

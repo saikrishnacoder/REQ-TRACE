@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     oracle_config_dir: str | None = None
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    cors_allowed_origins: list[str] = Field(default_factory=lambda: [
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://tauri.localhost",
+        "tauri://localhost",
+    ])
     auth_required: bool | None = None
     auth_token_secret: str = Field(default="", repr=False)
     auth_token_ttl_minutes: int = 60

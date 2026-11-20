@@ -24,7 +24,7 @@ been verified unless explicitly stated.
 | Dashboard | Project and requirement KPIs, test/run/defect metrics, status distribution, recent audit activity, refresh | Uses persisted API data. Date filters, trend charts, and a richer activity feed remain open. |
 | Requirements | CRUD/review, soft delete, filtering, sorting, pagination, CSV import/export, bulk priority, history, comments, R-R relationships | Persisted API behavior is tested. Excel/PDF export, tags, assignment, and generalized bulk editing remain open. Document intake stores a source reference and manually entered text; it does not parse or upload the selected file. |
 | AI intelligence | Structured requirement analysis, history, heuristic fallback, criteria recommendations, reviewable test suggestions | Fallback/schema behavior is tested. Live provider behavior needs credentials and has not been verified. Duplicate/contradiction analysis across the corpus and accept/reject/edit for all suggestion types remain open. |
-| Traceability | Requirement relationship links, test cases, latest runs, defects, GitHub requirement references, orphan/test coverage, failed case metrics | API and UI matrix implemented; API checks cover relationship and test/defect data. Design components and development task references are not modeled; no graph visualization. |
+| Traceability | Requirement relationship links, test cases, latest runs, defects, GitHub requirement references, orphan/test coverage, failed case metrics | API and UI matrix implemented. A knowledge graph now renders persisted requirement, test, defect, and linked GitHub records with search, type filters, zoom, and record details. Design components and development task references are not modeled; graph pan/drag, path highlighting, export, and minimap remain open. |
 | Test management | Manual case CRUD, requirement links, ordered steps, AI suggestions, execution status/history | API checks cover cases, runs, and suggestion persistence behavior. Test suites, assignment, priorities/types, attachments, and automated execution remain open. |
 | Defects | Creation, severity/status, requirement and case links | Core API behavior tested. Assignment, comments, reproduction fields, attachments, and full resolution history remain open. |
 | GitHub | Server token configuration, manual read-only import of repository metadata/issues/PRs/commits/branches, requirement links | Mocked provider path and token non-disclosure tested. Live account access is unverified. OAuth, webhook, pagination beyond the first 100 items per endpoint, and token vaulting are absent. |
@@ -33,9 +33,9 @@ been verified unless explicitly stated.
 | Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
 | Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite and Oracle dialect support | SQLite migration and packaged-sidecar smoke checks pass. A live Oracle upgrade/rollback and backup/restore are unverified. |
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
-| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account and project-member APIs, route-based membership guards, role checks, and in-process request limits | Oracle mode requires bearer auth. Admin can assign Editor/Viewer membership; non-admin project lists and project/record routes are membership-scoped. Password reset, immediate token revocation, distributed rate limiting, exhaustive route-family authorization tests, organization tenancy, CSRF (cookie mode), and deployment hardening remain open. **Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
+| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account and project-member APIs, route-based membership guards, role checks, in-process request limits, current-account token checks, configurable CORS origins | Oracle mode requires bearer auth. Admin can assign Editor/Viewer membership; non-admin project lists and project/record routes are membership-scoped. Deactivation and role changes now affect existing tokens immediately. Password reset, distributed rate limiting, exhaustive route-family authorization tests, organization tenancy, CSRF (cookie mode), and deployment hardening remain open. **Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
-| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest auth milestone: 20 backend tests passed; `tsc --noEmit` passed; Windows NSIS build passed (28.89 MiB), and the post-package suite passed. One Starlette/httpx deprecation warning remains. No frontend E2E suite or clean-machine installer verification. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | 21 backend tests pass after current auth/CORS changes; `tsc --noEmit`, Vite production build, and production npm audit pass (zero vulnerabilities). Manual browser smoke check covered all application routes, not-found routing, and no console errors. One Starlette/httpx deprecation warning remains. No repeat desktop packaging after the current changes, frontend automated E2E suite, or clean-machine installer verification. |
 
 ## Route inventory
 
@@ -47,6 +47,7 @@ been verified unless explicitly stated.
 | `/intake` | Manual, conversation, and document-referenced text intake; document parsing is not implemented |
 | `/project` | Active project details |
 | `/traceability` | Requirement, test, run, defect, and GitHub reference matrix |
+| `/knowledge-graph` | Interactive persisted-record graph for requirements, tests, defects, and GitHub references; search, entity filter, zoom, selection, and details |
 | `/tests` | Test case creation, suggestion review, manual runs, and history |
 | `/defects` | Defect creation and status changes |
 | `/ai` | Requirement analysis and persisted results |
@@ -78,7 +79,7 @@ gates below still apply.
    security. Oracle mode requires signed bearer tokens and now has project
    membership guards, but global account lifecycle remains API-only and the
    full route matrix still needs a dedicated security review. Add password recovery,
-   immediate token revocation, distributed request limits, organization
+   distributed request limits, organization
    tenancy, and deployment hardening before shared hosting.
 2. Oracle connectivity and schema upgrades were not exercised against a live
    Oracle instance in this environment. `python-oracledb` Thin mode supports
@@ -95,6 +96,20 @@ gates below still apply.
    machine test.
 
 ## Verification record
+
+For the 2026-11-20 audit slice:
+
+- Manual browser smoke check rendered all 15 application routes plus an
+  unmatched route; no browser console errors were observed.
+- `npm exec tsc -- --noEmit` and `npm run build` passed.
+- `npm audit --omit=dev` reported zero vulnerabilities; `pip check` reported no
+  broken requirements.
+- Backend suite: 21 passed, with one Starlette/httpx deprecation warning.
+- The knowledge graph is still a first pass: it does not yet model design,
+  task, objective, evidence, risk, document, or decision nodes, and it has no
+  automated UI coverage.
+- Hosting account lookup did not respond; no domain or deployment target was
+  identified. No production deployment was performed.
 
 For the latest authenticated API milestone, verification ran:
 
