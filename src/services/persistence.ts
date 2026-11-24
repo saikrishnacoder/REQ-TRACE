@@ -1,4 +1,5 @@
 import { isTauri } from '@tauri-apps/api/core';
+import { getDesktopApiToken } from './desktop';
 
 export interface ProjectRecord {
   id: string;
@@ -110,9 +111,16 @@ let outboxFlush: Promise<void> | null = null;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  const desktopToken = getDesktopApiToken();
+  const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(API_BASE);
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(isTauri() && isLoopback && desktopToken ? { 'X-ReqTrace-Local-Token': desktopToken } : {}),
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     if (response.status === 401 && path !== '/auth/login') window.dispatchEvent(new CustomEvent('reqtrace:auth-required'));

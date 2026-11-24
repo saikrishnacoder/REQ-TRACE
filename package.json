@@ -8,7 +8,7 @@
     "build": "vite build",
     "tauri": "tauri",
     "api:dev": "cd backend && .venv\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
-    "desktop:dev": "concurrently --kill-others \"npm run api:dev\" \"tauri dev\"",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:bundle:backend": "python backend/package_sidecar.py",
     "desktop:build": "npm run desktop:bundle:backend && tauri build",
     "preview": "vite preview"

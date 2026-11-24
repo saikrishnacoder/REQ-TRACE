@@ -1,6 +1,6 @@
 # ReqTrace AI technical audit and implementation report
 
-Audit refreshed: 2026-11-18. This report reflects the current repository, not
+Audit refreshed: 2026-11-24. This report reflects the current repository, not
 the original baseline. Feature claims below are limited to checked-in source
 and automated checks. External providers and a clean-machine install have not
 been verified unless explicitly stated.
@@ -9,10 +9,11 @@ been verified unless explicitly stated.
 
 - React 19, TypeScript, Vite, and React Router form the UI; Tauri 2 packages
   the Windows desktop app.
-- Python FastAPI and synchronous SQLAlchemy provide the local API and future
-  Oracle API. PyInstaller bundles the local sidecar.
-- SQLite is the local durable database. Oracle support uses `python-oracledb`
-  and Alembic migrations. The browser also has a local cache and write outbox.
+- Python FastAPI and synchronous SQLAlchemy provide the local API and server
+  adapters. PyInstaller bundles the local sidecar.
+- SQLite is the local durable database. PostgreSQL uses psycopg 3; Oracle uses
+  `python-oracledb`. Alembic manages schema migrations. The browser also has a
+  local cache and write outbox.
 - AI-compatible provider calls and GitHub API requests run on the Python
   server; their credentials are not included in browser responses.
 
@@ -31,11 +32,11 @@ been verified unless explicitly stated.
 | Assistant | Project-scoped stored conversations, retrieval from project records, cited sources, local fallback | API tests cover fallback/history/scoping. Live AI calls, streaming, regenerate, copy, and richer context selection are unverified or absent. |
 | Reports | Persisted requirement, test execution, and defect views; CSV export | CSV path is implemented. PDF/XLSX, AI analysis report, filters, and scheduled reports remain open. |
 | Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
-| Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite and Oracle dialect support | SQLite migration and packaged-sidecar smoke checks pass. A live Oracle upgrade/rollback and backup/restore are unverified. |
+| Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite plus PostgreSQL and Oracle adapters | SQLite migrations pass; PostgreSQL DDL and offline migration SQL compile. Live PostgreSQL/Oracle upgrades, rollback, and backup/restore remain unverified. |
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
-| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account and project-member APIs, route-based membership guards, role checks, in-process request limits, current-account token checks, configurable CORS origins | Oracle mode requires bearer auth. Admin can assign Editor/Viewer membership; non-admin project lists and project/record routes are membership-scoped. Deactivation and role changes now affect existing tokens immediately. Password reset, distributed rate limiting, exhaustive route-family authorization tests, organization tenancy, CSRF (cookie mode), and deployment hardening remain open. **Do not expose the API or Oracle deployment to a network.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
+| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account and project-member APIs, route-based membership guards, role checks, in-process request limits, current-account token checks, configurable CORS origins | PostgreSQL and Oracle modes require bearer auth. Admin can assign Editor/Viewer membership; non-admin project lists and project/record routes are membership-scoped. Deactivation and role changes now affect existing tokens immediately. Password reset, distributed rate limiting, exhaustive route-family authorization tests, organization tenancy, CSRF (cookie mode), and deployment hardening remain open. **Do not expose the API or database service publicly.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
-| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | 21 backend tests pass after current auth/CORS changes; `tsc --noEmit`, Vite production build, and production npm audit pass (zero vulnerabilities). Manual browser smoke check covered all application routes, not-found routing, and no console errors. One Starlette/httpx deprecation warning remains. No repeat desktop packaging after the current changes, frontend automated E2E suite, or clean-machine installer verification. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | 29 backend tests pass after Phase 01; `tsc --noEmit` and Vite production build pass. PostgreSQL Alembic offline SQL compilation passes without duplicate table creation. The 2026-11-20 audit recorded zero production npm vulnerabilities and a manual route smoke check. One Starlette/httpx deprecation warning remains. No repeat desktop packaging after the current changes, frontend automated E2E suite, live PostgreSQL server test, or clean-machine installer verification. |
 
 ## Route inventory
 
@@ -96,6 +97,18 @@ gates below still apply.
    machine test.
 
 ## Verification record
+
+For the 2026-11-24 Phase 01 update:
+
+- Backend suite: 29 passed, with one Starlette/httpx deprecation warning.
+- `npm exec tsc -- --noEmit`, `npm run build`, `pip check`, and Python
+  compilation passed.
+- PostgreSQL adapter URL selection and all mapped table DDL compile locally.
+  Alembic generated offline PostgreSQL SQL through revision `20261118_0012`
+  (20 unique tables). A live PostgreSQL server was not available, so this does not
+  verify a network connection or execute schema changes in PostgreSQL.
+- The project create/list/detail API workflow is tested against an isolated
+  SQLite database and read back through a fresh SQLAlchemy session.
 
 For the 2026-11-20 audit slice:
 

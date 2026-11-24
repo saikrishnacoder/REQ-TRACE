@@ -1,4 +1,5 @@
 import json
+import hmac
 import time
 import uuid
 from urllib.error import HTTPError, URLError
@@ -63,16 +64,24 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if settings.local_api_token:
+        if len(settings.local_api_token) < 32:
+            raise RuntimeError("REQTRACE_LOCAL_API_TOKEN must contain at least 32 characters")
+        if settings.api_host not in {"127.0.0.1", "localhost", "::1"}:
+            raise RuntimeError("A desktop sidecar with local API authentication must bind to loopback")
     # A desktop install must be usable immediately and persist records locally.
     # Server deployments use the same schema but are initialized explicitly.
-    if settings.database_mode.casefold() == "local":
-        config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-        command.upgrade(config, "head")
-    if settings.authentication_enabled:
-        if len(settings.auth_token_secret) < 32 or "replace-with" in settings.auth_token_secret.casefold():
-            raise RuntimeError("AUTH_TOKEN_SECRET must contain at least 32 characters when authentication is enabled")
-        seed_initial_admin()
-    yield
+    try:
+        if settings.database_mode.casefold() == "local":
+            config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+            command.upgrade(config, "head")
+        if settings.authentication_enabled:
+            if len(settings.auth_token_secret) < 32 or "replace-with" in settings.auth_token_secret.casefold():
+                raise RuntimeError("AUTH_TOKEN_SECRET must contain at least 32 characters when authentication is enabled")
+            seed_initial_admin()
+        yield
+    finally:
+        engine.dispose()
 
 
 app = FastAPI(
@@ -88,7 +97,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-ReqTrace-Local-Token"],
 )
 
 _rate_windows: dict[tuple[str, str], tuple[float, int]] = {}
@@ -96,6 +105,12 @@ _rate_windows: dict[tuple[str, str], tuple[float, int]] = {}
 
 @app.middleware("http")
 async def authenticate_api(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if settings.local_api_token:
+        supplied_token = request.headers.get("X-ReqTrace-Local-Token", "")
+        if not hmac.compare_digest(supplied_token, settings.local_api_token):
+            return JSONResponse(status_code=401, content={"detail": "A valid local application token is required"})
     if not settings.authentication_enabled or request.method == "OPTIONS" or request.url.path in {
         "/api/v1/health", "/api/docs", "/api/openapi.json", "/docs/oauth2-redirect",
     }:
@@ -252,18 +267,33 @@ def append_sync_event(db: Session, event_type: str, entity_type: str, entity_id:
 
 
 @app.get("/api/v1/health")
-def health(db: Session = Depends(get_db)):
+def health(response: Response, db: Session = Depends(get_db)):
     try:
-        query = "SELECT 1 FROM DUAL" if engine.dialect.name == "oracle" else "SELECT 1"
+        database = db.get_bind().dialect.name
+        query = "SELECT 1 FROM DUAL" if database == "oracle" else "SELECT 1"
         db.execute(text(query))
+        response.headers["X-ReqTrace-Local-Auth"] = "enabled" if settings.local_api_token else "disabled"
         return {
             "status": "ok",
-            "database": engine.dialect.name,
+            "database": database,
             "mode": settings.database_mode,
             "storage": "persistent",
+            "local_auth": bool(settings.local_api_token),
         }
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="The configured database is unavailable") from exc
+
+
+@app.post("/api/v1/desktop/shutdown", status_code=status.HTTP_202_ACCEPTED)
+def shutdown_desktop_sidecar():
+    """Ask the authenticated desktop sidecar to stop its Uvicorn server."""
+    if not settings.local_api_token:
+        raise HTTPException(status_code=404, detail="Desktop sidecar shutdown is not enabled")
+    request_shutdown = getattr(app.state, "request_shutdown", None)
+    if request_shutdown is None:
+        raise HTTPException(status_code=503, detail="Desktop sidecar shutdown is unavailable")
+    request_shutdown()
+    return {"status": "shutting_down"}
 
 
 @app.get("/api/v1/projects", response_model=list[ProjectRead])
@@ -274,6 +304,14 @@ def list_projects(request: Request, db: Session = Depends(get_db)):
         project_ids = select(ProjectMembership.project_id).where(ProjectMembership.user_id == claims.get("sub"))
         query = query.where(Project.id.in_(project_ids))
     return list(db.scalars(query).all())
+
+
+@app.get("/api/v1/projects/{project_id}", response_model=ProjectRead)
+def get_project(project_id: str, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
 
 
 @app.post("/api/v1/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)

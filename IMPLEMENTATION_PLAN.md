@@ -2,7 +2,9 @@
 
 This plan follows the user's attached ReqTrace requirements specification and
 the shared **Complete Project Setup Guide** conversation. The shared guide's
-PostgreSQL choice is superseded by the user's Oracle requirement. Its offline +
+PostgreSQL choice is superseded as the shared-database target by the user's
+Oracle requirement. Phase 01 also configures a PostgreSQL adapter through
+psycopg 3. Its offline +
 team operation, desktop-first interface, staged delivery, and separation of
 local and shared storage remain the product direction.
 
@@ -35,8 +37,9 @@ local and shared storage remain the product direction.
 
 ## Current build boundary
 
-The local SQLite, Oracle adapter, Alembic history, Tauri/PyInstaller packaging,
-and product modules have since been implemented incrementally. Oracle server
+The local SQLite, PostgreSQL and Oracle adapters, Alembic history,
+Tauri/PyInstaller packaging, and product modules have since been implemented
+incrementally. Oracle server
 mode remains a database development adapter, not a production team service.
 Oracle mode now requires an initial bearer-authentication foundation with
 global roles, but remote synchronization and project-level authorization are

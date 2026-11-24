@@ -11,6 +11,7 @@ from app import main
 from app import models  # noqa: F401 - register ORM models
 from app.auth import hash_password
 from app.config import settings
+from app.models import Project
 
 
 @pytest.fixture
@@ -47,6 +48,7 @@ def test_project_and_requirement_review_flow_is_persisted(client: TestClient) ->
     assert project_response.status_code == 201
     project = project_response.json()
     assert project["key"] == "PAYMENTS"
+
 
     requirement_response = client.post(
         f"/api/v1/projects/{project['id']}/requirements",
@@ -133,6 +135,47 @@ def test_project_key_is_unique(client: TestClient) -> None:
     second = client.post("/api/v1/projects", json={"name": "Second", "key": "APP"})
     assert first.status_code == 201
     assert second.status_code == 409
+
+
+def test_project_create_list_and_detail_are_persisted_between_sessions(client: TestClient) -> None:
+    response = client.post("/api/v1/projects", json={
+        "name": "Requirements workspace",
+        "key": "req-trace",
+        "description": "Phase one persistence",
+    })
+    assert response.status_code == 201
+    project = response.json()
+
+    # Each API request opens a new database session. Read directly through a
+    # fresh session too, so the assertion proves this is DB-backed persistence.
+    with app.state.session_factory() as db:
+        stored = db.get(Project, project["id"])
+        assert stored is not None
+        assert stored.name == "Requirements workspace"
+        assert stored.key == "REQ-TRACE"
+        assert stored.description == "Phase one persistence"
+
+    listed = client.get("/api/v1/projects")
+    assert listed.status_code == 200
+    assert any(item["id"] == project["id"] for item in listed.json())
+
+    detail = client.get(f"/api/v1/projects/{project['id']}")
+    assert detail.status_code == 200
+    assert detail.json() == project
+
+
+def test_project_detail_returns_not_found_for_unknown_id(client: TestClient) -> None:
+    response = client.get("/api/v1/projects/missing-project")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found"
+
+
+def test_health_reports_database_readiness(client: TestClient) -> None:
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["database"] == "sqlite"
+    assert response.json()["storage"] == "persistent"
 
 
 def test_delete_removes_requirement_from_active_list_and_keeps_audit(client: TestClient) -> None:
@@ -499,3 +542,25 @@ def test_bootstrap_admin_is_only_created_once(client: TestClient, monkeypatch) -
     assert first_hash == second_hash
     assert db.scalar(select(models.UserAccount.role).where(models.UserAccount.email == "admin@example.test")) == "Admin"
     session_generator.close()
+
+
+def test_desktop_local_token_guards_health_and_shutdown(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "local_api_token", "d" * 64)
+    monkeypatch.setattr(app.state, "request_shutdown", None, raising=False)
+
+    assert client.get("/api/v1/health").status_code == 401
+    assert client.post("/api/v1/desktop/shutdown").status_code == 401
+
+    headers = {"X-ReqTrace-Local-Token": "d" * 64}
+    health = client.get("/api/v1/health", headers=headers)
+    assert health.status_code == 200
+    assert health.json()["local_auth"] is True
+    assert health.headers["X-ReqTrace-Local-Auth"] == "enabled"
+    assert client.post("/api/v1/desktop/shutdown", headers=headers).status_code == 503
+
+    calls: list[str] = []
+    monkeypatch.setattr(app.state, "request_shutdown", lambda: calls.append("shutdown"), raising=False)
+    shutdown = client.post("/api/v1/desktop/shutdown", headers=headers)
+    assert shutdown.status_code == 202
+    assert shutdown.json() == {"status": "shutting_down"}
+    assert calls == ["shutdown"]

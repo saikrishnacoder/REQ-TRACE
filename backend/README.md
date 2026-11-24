@@ -1,7 +1,8 @@
 # ReqTrace Python API
 
 FastAPI is the local desktop API and the intended server API. SQLAlchemy
-supports SQLite for the offline workspace and Oracle through `python-oracledb`.
+supports SQLite for the offline workspace, PostgreSQL through psycopg 3, and
+Oracle through `python-oracledb`.
 See the repository [audit report](../AUDIT_REPORT.md) for tested modules and
 known limitations.
 
@@ -32,6 +33,14 @@ python -m pytest -q tests
 
 API docs: `http://127.0.0.1:8000/api/docs`.
 
+For Tauri development, run `npm run desktop:dev` from the repository root
+instead of starting Uvicorn separately. That command creates a cryptographically
+random per-session `REQTRACE_LOCAL_API_TOKEN`, starts Uvicorn on loopback,
+waits for an authenticated health response, and passes the token to the React
+webview. The API rejects local calls without the token and exits gracefully on
+the authenticated desktop shutdown request. Ordinary `npm run api:dev` remains
+available for browser-only development without the desktop token.
+
 ## Oracle configuration
 
 Set `DATABASE_MODE=oracle` and configure `ORACLE_USER`, `ORACLE_PASSWORD`,
@@ -45,6 +54,20 @@ tables through the initial `checkfirst` migration.
 supports Thin mode. Oracle 11g requires a compatible Instant Client and
 `ORACLE_CLIENT_LIB_DIR` to enable Thick mode. A live Oracle upgrade has not
 been verified in this workspace.
+
+## PostgreSQL configuration
+
+Set `DATABASE_MODE=postgresql` and configure `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_DATABASE`.
+Alternatively, set `DATABASE_URL` to a SQLAlchemy URL using the explicit
+`postgresql+psycopg://` driver. PostgreSQL mode requires bearer authentication
+by default; configure `AUTH_TOKEN_SECRET`, `AUTH_BOOTSTRAP_EMAIL`, and
+`AUTH_BOOTSTRAP_PASSWORD` before starting the API. Apply schema migrations with
+`python -m app.init_db` after the database is reachable. Health checks execute a
+database query and return HTTP 503 if the configured database cannot be used.
+
+PostgreSQL adapter configuration and SQL DDL compilation are covered by local
+tests. A live PostgreSQL server migration has not been verified here.
 
 ## Optional integrations
 
