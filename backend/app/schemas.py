@@ -3,10 +3,12 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-RequirementType = Literal["Functional", "Non-functional", "Security", "Performance", "Usability"]
+RequirementType = Literal["Functional", "Non-functional", "Performance", "Security", "Usability", "Technical", "Interface", "Business", "Regulatory", "Constraint"]
 Priority = Literal["Critical", "High", "Medium", "Low"]
 SourceType = Literal["Conversation", "Document", "Manual"]
-RequirementStatus = Literal["Draft", "Under review", "Approved", "Rejected"]
+RequirementStatus = Literal["Draft", "Under review", "Approved", "In progress", "Implemented", "Verified", "Rejected", "Archived"]
+ProjectStatus = Literal["Active", "On hold", "Completed"]
+VerificationMethod = Literal["Test", "Inspection", "Analysis", "Demonstration"]
 RelationshipType = Literal["depends_on", "relates_to", "conflicts_with"]
 
 
@@ -77,6 +79,27 @@ class ProjectCreate(APIModel):
     name: str = Field(min_length=1, max_length=200)
     key: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9-]+$")
     description: str = Field(default="", max_length=1000)
+    workspace_id: str | None = Field(default=None, max_length=36)
+    owner_user_id: str | None = Field(default=None, max_length=36)
+    category: str = Field(default="General", min_length=1, max_length=80)
+    status: ProjectStatus = "Active"
+    priority: Priority = "Medium"
+    start_date: datetime | None = None
+    target_date: datetime | None = None
+    objectives: str = Field(default="", max_length=10000)
+
+    @field_validator("category")
+    @classmethod
+    def trim_category(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Project category cannot be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def dates_are_ordered(self):
+        if self.start_date and self.target_date and self.target_date < self.start_date:
+            raise ValueError("Target date must be on or after the project start date")
+        return self
 
     @field_validator("name")
     @classmethod
@@ -97,21 +120,125 @@ class ProjectRead(APIModel):
     name: str
     key: str
     description: str
+    workspace_id: str | None = None
+    owner_user_id: str | None = None
+    category: str
+    status: str
+    priority: Priority
+    start_date: datetime | None
+    target_date: datetime | None
+    objectives: str
+    archived_at: datetime | None
     created_at: datetime
+    updated_at: datetime
 
     @field_validator("description", mode="before")
     @classmethod
     def normalize_optional_description(cls, value):
         return value or ""
 
+    @field_validator("objectives", mode="before")
+    @classmethod
+    def normalize_optional_objectives(cls, value):
+        return value or ""
+
+
+class ProjectUpdate(APIModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    category: str | None = Field(default=None, min_length=1, max_length=80)
+    owner_user_id: str | None = Field(default=None, max_length=36)
+    status: ProjectStatus | None = None
+    priority: Priority | None = None
+    start_date: datetime | None = None
+    target_date: datetime | None = None
+    objectives: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("name", "category")
+    @classmethod
+    def trim_project_updates(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("Project name/category cannot be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def update_dates_are_ordered(self):
+        if self.start_date and self.target_date and self.target_date < self.start_date:
+            raise ValueError("Target date must be on or after the project start date")
+        return self
+
+
+class WorkspaceCreate(APIModel):
+    name: str = Field(min_length=1, max_length=200)
+    key: str = Field(min_length=1, max_length=24, pattern=r"^[A-Z0-9-]+$")
+
+    @field_validator("name")
+    @classmethod
+    def trim_workspace_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Workspace name cannot be blank")
+        return value.strip()
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def normalize_workspace_key(cls, value):
+        return str(value).strip().upper()
+
+
+class WorkspaceRead(APIModel):
+    id: str
+    name: str
+    key: str
+    owner_user_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkspaceMemberCreate(APIModel):
+    user_id: str = Field(min_length=1, max_length=36)
+    role: Literal["Admin", "Editor", "Viewer"] = "Viewer"
+
+
+class WorkspaceMemberRead(APIModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: str
+    created_at: datetime
+
+
+class DocumentExtractRequest(APIModel):
+    filename: str = Field(min_length=1, max_length=255)
+    media_type: str = Field(default="application/octet-stream", max_length=120)
+    content_base64: str = Field(min_length=1, max_length=14_000_000)
+
+
+class SourceDocumentRead(APIModel):
+    id: str
+    project_id: str
+    filename: str
+    media_type: str
+    byte_size: int
+    extraction_method: str
+    extracted_text: str
+    candidate_statements: list[str]
+    created_at: datetime
+
 
 class RequirementCreate(APIModel):
     id: str | None = None
     code: str | None = Field(default=None, max_length=40)
+    source_document_id: str | None = Field(default=None, max_length=36)
     title: str = Field(min_length=1, max_length=300)
+    description: str = ""
     statement: str = Field(min_length=1)
     requirement_type: RequirementType = Field(validation_alias=AliasChoices("type", "requirement_type"), serialization_alias="type")
     priority: Priority
+    owner_user_id: str | None = None
+    verification_method: Literal["Test", "Inspection", "Analysis", "Demonstration"] = "Test"
+    tags: list[str] = Field(default_factory=list, max_length=30)
     actor: str = Field(default="", max_length=500)
     preconditions: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
@@ -127,12 +254,24 @@ class RequirementCreate(APIModel):
             raise ValueError("This field cannot be blank")
         return value
 
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(tag.strip() for tag in values if tag.strip()))
+        if any(len(tag) > 40 for tag in cleaned):
+            raise ValueError("Tags must be 40 characters or fewer")
+        return cleaned
+
 
 class RequirementUpdate(APIModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
     statement: str | None = Field(default=None, min_length=1)
     requirement_type: RequirementType | None = Field(default=None, validation_alias=AliasChoices("type", "requirement_type"), serialization_alias="type")
     priority: Priority | None = None
+    owner_user_id: str | None = None
+    verification_method: Literal["Test", "Inspection", "Analysis", "Demonstration"] | None = None
+    tags: list[str] | None = Field(default=None, max_length=30)
     actor: str | None = None
     preconditions: str | None = None
     acceptance_criteria: list[str] | None = None
@@ -148,15 +287,49 @@ class RequirementUpdate(APIModel):
             raise ValueError("This field cannot be blank")
         return value
 
+    @field_validator("tags")
+    @classmethod
+    def normalize_optional_tags(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return values
+        cleaned = list(dict.fromkeys(tag.strip() for tag in values if tag.strip()))
+        if any(len(tag) > 40 for tag in cleaned):
+            raise ValueError("Tags must be 40 characters or fewer")
+        return cleaned
+
+
+class RequirementBulkUpdate(APIModel):
+    requirement_ids: list[str] = Field(min_length=1, max_length=500)
+    priority: Priority | None = None
+    status: RequirementStatus | None = None
+    owner_user_id: str | None = None
+    tags: list[str] | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="after")
+    def require_fields(self):
+        if not any(name in self.model_fields_set for name in ("priority", "status", "owner_user_id", "tags")):
+            raise ValueError("Specify at least one field to update")
+        return self
+
+
+class RequirementBulkDelete(APIModel):
+    requirement_ids: list[str] = Field(min_length=1, max_length=500)
+
 
 class RequirementRead(APIModel):
     id: str
     project_id: str
+    source_document_id: str | None = None
     code: str
     title: str
+    description: str
     statement: str
     requirement_type: RequirementType = Field(serialization_alias="type")
     priority: Priority
+    owner_user_id: str | None
+    verification_method: Literal["Test", "Inspection", "Analysis", "Demonstration"]
+    current_version: int
+    tags: list[str]
     actor: str
     preconditions: str
     acceptance_criteria: list[str]
@@ -171,6 +344,11 @@ class RequirementRead(APIModel):
     @field_validator("actor", "preconditions", mode="before")
     @classmethod
     def normalize_optional_text(cls, value):
+        return value or ""
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_optional_description(cls, value):
         return value or ""
 
 

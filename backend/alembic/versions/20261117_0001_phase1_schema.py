@@ -24,7 +24,7 @@ def upgrade() -> None:
         # Phase 1 tables here; later revisions create their own tables. The
         # metadata reflects the current schema, so the soft-delete column is
         # already included and revision 0002 skips its online-only inspection.
-        core_tables = {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX"}
+        core_tables = {"RT_PROJECTS", "RT_SOURCE_DOCUMENTS", "RT_REQUIREMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX"}
         for table in Base.metadata.sorted_tables:
             if table.name in core_tables:
                 table.create(bind=op.get_bind(), checkfirst=False)

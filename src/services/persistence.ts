@@ -7,23 +7,39 @@ export interface ProjectRecord {
   key: string;
   description: string;
   createdAt: string;
+  workspaceId?: string | null;
+  ownerUserId?: string | null;
+  category?: string;
+  status?: 'Active' | 'On hold' | 'Completed' | 'Archived';
+  priority?: 'Critical' | 'High' | 'Medium' | 'Low';
+  startDate?: string | null;
+  targetDate?: string | null;
+  objectives?: string;
+  archivedAt?: string | null;
+  updatedAt?: string;
 }
 
 export interface RequirementRecord {
   id: string;
   projectId: string;
+  sourceDocumentId?: string | null;
   code: string;
   title: string;
   statement: string;
-  type: 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
+  description?: string;
+  type: 'Functional' | 'Non-functional' | 'Performance' | 'Security' | 'Usability' | 'Technical' | 'Interface' | 'Business' | 'Regulatory' | 'Constraint';
   priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  ownerUserId?: string | null;
+  verificationMethod?: 'Test' | 'Inspection' | 'Analysis' | 'Demonstration';
+  currentVersion?: number;
+  tags?: string[];
   actor: string;
   preconditions: string;
   acceptanceCriteria: string[];
   sourceType: 'Conversation' | 'Document' | 'Manual';
   sourceReference: string;
   originalText: string;
-  status: 'Draft' | 'Under review' | 'Approved' | 'Rejected';
+  status: 'Draft' | 'Under review' | 'Approved' | 'In progress' | 'Implemented' | 'Verified' | 'Rejected' | 'Archived';
   createdAt: string;
   reviewedAt?: string;
   updatedAt?: string;
@@ -67,6 +83,18 @@ type DatabaseKind = 'sqlite' | 'oracle' | string;
 export interface AuthSession { accessToken: string; tokenType: string; expiresIn: number; user: { id: string; email: string; role: string } }
 export interface AuthIdentity { authenticated: boolean; authRequired: boolean; id?: string; email?: string; role?: string }
 export interface UserAccountRecord { id: string; email: string; role: string; active: boolean; createdAt: string }
+export interface WorkspaceRecord { id: string; name: string; key: string; ownerUserId: string | null; createdAt: string; updatedAt: string }
+export interface WorkspaceMemberRecord { id: string; workspaceId: string; userId: string; role: 'Owner' | 'Admin' | 'Editor' | 'Viewer'; createdAt: string }
+export const getWorkspaces = () => request<WorkspaceRecord[]>('/workspaces');
+export const createWorkspace = (name: string, key: string) => request<WorkspaceRecord>('/workspaces', { method: 'POST', body: JSON.stringify({ name, key }) });
+export const getWorkspaceMembers = (id: string) => request<WorkspaceMemberRecord[]>(`/workspaces/${id}/members`);
+export const addWorkspaceMember = (id: string, userId: string, role: WorkspaceMemberRecord['role']) => request<WorkspaceMemberRecord>(`/workspaces/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, role }) });
+export const removeWorkspaceMember = (id: string, userId: string) => request<void>(`/workspaces/${id}/members/${userId}`, { method: 'DELETE' });
+export const updateProject = (id: string, updates: Partial<ProjectRecord>) => request<ProjectRecord>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(updates) });
+export const archiveProject = (id: string) => request<ProjectRecord>(`/projects/${id}/archive`, { method: 'POST' });
+export const restoreProject = (id: string) => request<ProjectRecord>(`/projects/${id}/restore`, { method: 'POST' });
+export const duplicateProject = (id: string) => request<ProjectRecord>(`/projects/${id}/duplicate`, { method: 'POST' });
+export const deleteProject = (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' });
 export interface ProjectMemberRecord { id: string; projectId: string; userId: string; role: 'Editor' | 'Viewer'; createdAt: string }
 
 export async function login(email: string, password: string): Promise<AuthSession> {
@@ -239,6 +267,9 @@ export async function queueWrite(method: PendingWrite['method'], path: string, b
     await flushOutbox();
     return { online: true, database: health.database, pending: 0, error: null };
   } catch (error) {
+    if (error instanceof APIError && error.status < 500) {
+      return { online: Boolean(remoteDatabase), database: remoteDatabase, pending: pendingWriteCount(), error: error.message };
+    }
     if (remoteDatabase !== 'oracle') {
       const queue = readOutbox();
       queue.push({ id: crypto.randomUUID(), method, path, body });
@@ -247,6 +278,11 @@ export async function queueWrite(method: PendingWrite['method'], path: string, b
     return { online: false, database: null, pending: pendingWriteCount(), error: describeError(error) };
   }
 }
+
+export const bulkUpdateRequirements = (projectId: string, requirementIds: string[], updates: Record<string, unknown>) =>
+  queueWrite('PATCH', `/projects/${projectId}/requirements/bulk`, { requirementIds, ...updates });
+export const bulkDeleteRequirements = (projectId: string, requirementIds: string[]) =>
+  queueWrite('POST', `/projects/${projectId}/requirements/bulk-delete`, { requirementIds });
 
 export async function getTraceability(projectId: string) {
   return request<TraceabilitySnapshot>(`/projects/${projectId}/traceability`);
@@ -260,6 +296,16 @@ export const getDefects = (projectId: string) => request<DefectRecord[]>(`/proje
 export const createDefect = (projectId: string, payload: { requirementId: string | null; testCaseId: string | null; title: string; description: string; severity: string }) => request<DefectRecord>(`/projects/${projectId}/defects`, { method: 'POST', body: JSON.stringify(payload) });
 export const updateDefect = (id: string, status: string) => request<DefectRecord>(`/defects/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
 export interface RequirementAnalysisRecord { id: string; requirementId: string; provider: string; createdAt: string; result: { qualityScore: number; clarityScore: number; completenessScore: number; testabilityScore: number; ambiguityScore: number; issues: { category: string; explanation: string; evidence: string }[]; suggestedImprovements: string[]; recommendedAcceptanceCriteria: string[]; isAiGenerated: boolean } }
+export interface SourceDocumentRecord { id: string; projectId: string; filename: string; mediaType: string; byteSize: number; extractionMethod: string; extractedText: string; candidateStatements: string[]; createdAt: string }
+export const extractProjectDocument = async (projectId: string, file: File) => {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return request<SourceDocumentRecord>(`/projects/${projectId}/documents/extract`, {
+    method: 'POST', body: JSON.stringify({ filename: file.name, mediaType: file.type || 'application/octet-stream', contentBase64: btoa(binary) }),
+  });
+};
+export const getProjectDocuments = (projectId: string) => request<SourceDocumentRecord[]>(`/projects/${projectId}/documents`);
 export const analyzeRequirement = (id: string) => request<RequirementAnalysisRecord>(`/requirements/${id}/analyses`, { method: 'POST' });
 export const getRequirementAnalyses = (id: string) => request<RequirementAnalysisRecord[]>(`/requirements/${id}/analyses`);
 export interface TestExecutionRecord { id: string; projectId: string; testCaseId: string; status: 'Passed' | 'Failed' | 'Blocked' | 'Skipped'; actualResult: string; executedAt: string }

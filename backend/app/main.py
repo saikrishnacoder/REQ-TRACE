@@ -1,7 +1,12 @@
+import base64
+import io
 import json
 import hmac
+import re
 import time
 import uuid
+import zipfile
+from xml.etree import ElementTree
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest, urlopen
 from contextlib import asynccontextmanager
@@ -20,8 +25,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.auth import decode_token, hash_password, issue_token, verify_password
 from app.database import SessionLocal, engine, get_db
-from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, ProjectMembership, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SyncOutboxEvent, TestCase, TestExecution, UserAccount
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectMemberCreate, ProjectMemberRead, ProjectRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
+from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, ProjectMembership, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SourceDocument, SyncOutboxEvent, TestCase, TestExecution, UserAccount, Workspace, WorkspaceMembership
+from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, DocumentExtractRequest, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectMemberCreate, ProjectMemberRead, ProjectRead, ProjectUpdate, WorkspaceCreate, WorkspaceMemberCreate, WorkspaceMemberRead, WorkspaceRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementBulkDelete, RequirementBulkUpdate, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, SourceDocumentRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
 
 
 def authorize_project_access(request: Request, db: Session = Depends(get_db)) -> None:
@@ -36,11 +41,31 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
     if path and path[0] == "github" and len(path) > 1 and path[1] == "repositories":
         raise HTTPException(status_code=403, detail="Only administrators can browse available GitHub repositories")
 
+    if path and path[0] == "workspaces" and len(path) > 1:
+        workspace = db.get(Workspace, path[1])
+        if workspace is None:
+            return
+        membership = db.scalar(select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.user_id == claims.get("sub"),
+        ))
+        if membership is None:
+            raise HTTPException(status_code=403, detail="You do not have access to this workspace")
+        if len(path) > 2 and path[2] == "members" and request.method not in {"GET", "HEAD"} and membership.role not in {"Owner", "Admin"}:
+            raise HTTPException(status_code=403, detail="Only workspace owners and admins can manage team membership")
+        if request.method not in {"GET", "HEAD"} and membership.role == "Viewer":
+            raise HTTPException(status_code=403, detail="Workspace Viewer role cannot modify data")
     project_id: str | None = None
     if path and path[0] == "projects" and len(path) > 1:
         project_id = path[1]
-        if len(path) > 2 and path[2] == "members":
-            raise HTTPException(status_code=403, detail="Only administrators can manage project membership")
+        if len(path) > 2 and path[2] == "members" and claims.get("role") != "Admin":
+            project_for_members = db.get(Project, project_id)
+            workspace_membership = db.scalar(select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == project_for_members.workspace_id,
+                WorkspaceMembership.user_id == claims.get("sub"),
+            )) if project_for_members and project_for_members.workspace_id else None
+            if not workspace_membership or workspace_membership.role not in {"Owner", "Admin"}:
+                raise HTTPException(status_code=403, detail="Only workspace owners and admins can manage project membership")
     elif len(path) > 1:
         entity_id = path[1]
         entity_model = {
@@ -53,14 +78,33 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
             project_id = db.scalar(select(entity_model.project_id).where(entity_model.id == entity_id))
     if project_id is None:
         return
-    membership = db.scalar(select(ProjectMembership).where(
+    project = db.get(Project, project_id)
+    workspace_membership = db.scalar(select(WorkspaceMembership).where(
+        WorkspaceMembership.workspace_id == project.workspace_id,
+        WorkspaceMembership.user_id == claims.get("sub"),
+    )) if project and project.workspace_id else None
+    project_membership = db.scalar(select(ProjectMembership).where(
         ProjectMembership.project_id == project_id,
         ProjectMembership.user_id == claims.get("sub"),
     ))
-    if membership is None:
+    if workspace_membership is None and project_membership is None:
         raise HTTPException(status_code=403, detail="You do not have access to this project")
-    if request.method not in {"GET", "HEAD"} and (claims.get("role") == "Viewer" or membership.role == "Viewer"):
+    if request.method not in {"GET", "HEAD"} and (
+        (workspace_membership is not None and workspace_membership.role == "Viewer")
+        or (project_membership is not None and project_membership.role == "Viewer")
+    ):
         raise HTTPException(status_code=403, detail="Viewer role cannot modify project data")
+    request.state.workspace_role = workspace_membership.role if workspace_membership else None
+    if request.method == "DELETE" and (workspace_membership is None or workspace_membership.role not in {"Owner", "Admin"}):
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins or system admins can delete records")
+    if path and path[0] == "projects" and len(path) > 2 and path[2] == "archive" and (
+        workspace_membership is None or workspace_membership.role not in {"Owner", "Admin"}
+    ):
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins can archive projects")
+    if path and path[0] == "projects" and len(path) > 2 and path[2] == "restore" and (
+        workspace_membership is None or workspace_membership.role not in {"Owner", "Admin"}
+    ):
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins can restore projects")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -156,8 +200,6 @@ async def authenticate_api(request: Request, call_next):
         return JSONResponse(status_code=403, content={"detail": "Only administrators can manage user accounts"})
     if request.method not in {"GET", "HEAD"} and role == "Viewer":
         return JSONResponse(status_code=403, content={"detail": "Viewer role cannot modify project data"})
-    if request.method == "DELETE" and role != "Admin":
-        return JSONResponse(status_code=403, content={"detail": "Only administrators can delete records"})
     request.state.user = claims
     return await call_next(request)
 
@@ -296,20 +338,103 @@ def shutdown_desktop_sidecar():
     return {"status": "shutting_down"}
 
 
+def _workspace_membership(db: Session, workspace_id: str, user_id: str):
+    return db.scalar(select(WorkspaceMembership).where(
+        WorkspaceMembership.workspace_id == workspace_id,
+        WorkspaceMembership.user_id == user_id,
+    ))
+
+
+def _default_workspace(db: Session) -> Workspace:
+    workspace = db.get(Workspace, "default-workspace")
+    if workspace is None:
+        workspace = Workspace(id="default-workspace", name="Default Workspace", key="DEFAULT")
+        db.add(workspace)
+        db.flush()
+    return workspace
+
+
+@app.get("/api/v1/workspaces", response_model=list[WorkspaceRead])
+def list_workspaces(request: Request, db: Session = Depends(get_db)):
+    claims = getattr(request.state, "user", {})
+    query = select(Workspace).order_by(Workspace.created_at)
+    if settings.authentication_enabled and claims.get("role") != "Admin":
+        ids = select(WorkspaceMembership.workspace_id).where(WorkspaceMembership.user_id == claims.get("sub"))
+        query = query.where(Workspace.id.in_(ids))
+    return list(db.scalars(query).all())
+
+
+@app.post("/api/v1/workspaces", response_model=WorkspaceRead, status_code=status.HTTP_201_CREATED)
+def create_workspace(payload: WorkspaceCreate, request: Request, db: Session = Depends(get_db)):
+    claims = getattr(request.state, "user", {})
+    owner_id = claims.get("sub") if settings.authentication_enabled else None
+    workspace = Workspace(id=str(uuid.uuid4()), name=payload.name, key=payload.key, owner_user_id=owner_id)
+    db.add(workspace)
+    if owner_id:
+        db.add(WorkspaceMembership(id=str(uuid.uuid4()), workspace_id=workspace.id, user_id=owner_id, role="Owner"))
+    try:
+        db.commit()
+        db.refresh(workspace)
+        return workspace
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Workspace key already exists") from exc
+
+
+@app.get("/api/v1/workspaces/{workspace_id}/members", response_model=list[WorkspaceMemberRead])
+def list_workspace_members(workspace_id: str, db: Session = Depends(get_db)):
+    if db.get(Workspace, workspace_id) is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return list(db.scalars(select(WorkspaceMembership).where(WorkspaceMembership.workspace_id == workspace_id).order_by(WorkspaceMembership.created_at)).all())
+
+
+@app.post("/api/v1/workspaces/{workspace_id}/members", response_model=WorkspaceMemberRead, status_code=status.HTTP_201_CREATED)
+def add_workspace_member(workspace_id: str, payload: WorkspaceMemberCreate, db: Session = Depends(get_db)):
+    if db.get(Workspace, workspace_id) is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    user = db.get(UserAccount, payload.user_id)
+    if user is None or not user.active:
+        raise HTTPException(status_code=404, detail="Active user account not found")
+    if user.role == "Viewer" and payload.role != "Viewer":
+        raise HTTPException(status_code=422, detail="A global Viewer account cannot receive a workspace write role")
+    membership = _workspace_membership(db, workspace_id, payload.user_id)
+    if membership:
+        membership.role = payload.role
+    else:
+        membership = WorkspaceMembership(id=str(uuid.uuid4()), workspace_id=workspace_id, user_id=payload.user_id, role=payload.role)
+        db.add(membership)
+    db.commit()
+    db.refresh(membership)
+    return membership
+
+
+@app.delete("/api/v1/workspaces/{workspace_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_workspace_member(workspace_id: str, user_id: str, db: Session = Depends(get_db)) -> Response:
+    membership = _workspace_membership(db, workspace_id, user_id)
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Workspace membership not found")
+    if membership.role == "Owner":
+        raise HTTPException(status_code=409, detail="Transfer workspace ownership before removing the owner")
+    db.delete(membership)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get("/api/v1/projects", response_model=list[ProjectRead])
 def list_projects(request: Request, db: Session = Depends(get_db)):
-    query = select(Project).order_by(Project.created_at.desc())
+    query = select(Project).where(Project.deleted_at.is_(None)).order_by(Project.created_at.desc())
     claims = getattr(request.state, "user", {})
     if settings.authentication_enabled and claims.get("role") != "Admin":
         project_ids = select(ProjectMembership.project_id).where(ProjectMembership.user_id == claims.get("sub"))
-        query = query.where(Project.id.in_(project_ids))
+        workspace_ids = select(WorkspaceMembership.workspace_id).where(WorkspaceMembership.user_id == claims.get("sub"))
+        query = query.where((Project.id.in_(project_ids)) | (Project.workspace_id.in_(workspace_ids)))
     return list(db.scalars(query).all())
 
 
 @app.get("/api/v1/projects/{project_id}", response_model=ProjectRead)
 def get_project(project_id: str, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
-    if project is None:
+    if project is None or project.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
@@ -319,25 +444,55 @@ def create_project(payload: ProjectCreate, response: Response, request: Request,
     if payload.id and (existing := db.get(Project, payload.id)) is not None:
         claims = getattr(request.state, "user", {})
         if settings.authentication_enabled and claims.get("role") != "Admin":
-            membership = db.scalar(select(ProjectMembership).where(
-                ProjectMembership.project_id == existing.id,
-                ProjectMembership.user_id == claims.get("sub"),
+            workspace_access = _workspace_membership(db, existing.workspace_id or "", claims.get("sub", ""))
+            project_access = db.scalar(select(ProjectMembership.id).where(
+                ProjectMembership.project_id == existing.id, ProjectMembership.user_id == claims.get("sub"),
             ))
-            if membership is None:
+            if workspace_access is None and project_access is None:
                 raise HTTPException(status_code=403, detail="You do not have access to this project")
         return existing
+    claims = getattr(request.state, "user", {})
+    workspace = db.get(Workspace, payload.workspace_id) if payload.workspace_id else None
+    if workspace is None:
+        if settings.authentication_enabled and claims.get("role") != "Admin":
+            user_id = claims.get("sub")
+            workspace = db.scalar(select(Workspace).join(WorkspaceMembership).where(
+                WorkspaceMembership.user_id == user_id,
+                WorkspaceMembership.role.in_(["Owner", "Admin", "Editor"]),
+            ).order_by(Workspace.created_at).limit(1))
+            if workspace is None:
+                key_suffix = (user_id or "user").replace("-", "")[:10].upper()
+                workspace = Workspace(id=str(uuid.uuid4()), name="Personal Workspace", key=f"P-{key_suffix}", owner_user_id=user_id)
+                db.add(workspace)
+                db.flush()
+                db.add(WorkspaceMembership(id=str(uuid.uuid4()), workspace_id=workspace.id, user_id=user_id, role="Owner"))
+                db.flush()
+        else:
+            workspace = _default_workspace(db)
+    if settings.authentication_enabled and claims.get("role") != "Admin":
+        membership = _workspace_membership(db, workspace.id, claims.get("sub", ""))
+        if membership is None or membership.role == "Viewer":
+            raise HTTPException(status_code=403, detail="You need Editor access in the selected workspace to create a project")
+    if payload.owner_user_id and _workspace_membership(db, workspace.id, payload.owner_user_id) is None:
+        raise HTTPException(status_code=422, detail="Project owner must be an active member of its workspace")
     created_at = datetime.now(timezone.utc)
     project = Project(
         id=payload.id or str(uuid.uuid4()),
         name=payload.name.strip(),
         key=payload.key.strip().upper(),
         description=payload.description.strip(),
+        workspace_id=workspace.id,
+        owner_user_id=payload.owner_user_id or claims.get("sub"),
+        category=payload.category.strip(),
+        status=payload.status,
+        priority=payload.priority,
+        start_date=payload.start_date,
+        target_date=payload.target_date,
+        objectives=payload.objectives.strip(),
         created_at=created_at,
+        updated_at=created_at,
     )
     db.add(project)
-    claims = getattr(request.state, "user", {})
-    if settings.authentication_enabled and claims.get("role") != "Admin":
-        db.add(ProjectMembership(id=str(uuid.uuid4()), project_id=project.id, user_id=claims["sub"], role="Editor"))
     append_audit(db, project.id, "project_created", detail={"name": project.name, "key": project.key})
     append_sync_event(db, "project.upsert", "project", project.id, {
         "id": project.id,
@@ -353,6 +508,146 @@ def create_project(payload: ProjectCreate, response: Response, request: Request,
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="A project with this key already exists") from exc
+
+
+@app.patch("/api/v1/projects/{project_id}", response_model=ProjectRead)
+def update_project(project_id: str, payload: ProjectUpdate, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if updates.get("owner_user_id") and _workspace_membership(db, project.workspace_id or "", updates["owner_user_id"]) is None:
+        raise HTTPException(status_code=422, detail="Project owner must be a workspace member")
+    for field, value in updates.items():
+        if value is not None or field in {"owner_user_id", "start_date", "target_date"}:
+            setattr(project, field, value.strip() if isinstance(value, str) else value)
+    project.updated_at = datetime.now(timezone.utc)
+    append_audit(db, project.id, "project_updated", detail={"fields": sorted(updates)})
+    append_sync_event(db, "project.upsert", "project", project.id, ProjectRead.model_validate(project).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@app.post("/api/v1/projects/{project_id}/archive", response_model=ProjectRead)
+def archive_project(project_id: str, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.status = "Archived"
+    project.archived_at = datetime.now(timezone.utc)
+    project.updated_at = project.archived_at
+    append_audit(db, project.id, "project_archived")
+    append_sync_event(db, "project.upsert", "project", project.id, ProjectRead.model_validate(project).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@app.post("/api/v1/projects/{project_id}/restore", response_model=ProjectRead)
+def restore_project(project_id: str, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.status = "Active"
+    project.archived_at = None
+    project.updated_at = datetime.now(timezone.utc)
+    append_audit(db, project.id, "project_restored")
+    append_sync_event(db, "project.upsert", "project", project.id, ProjectRead.model_validate(project).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@app.post("/api/v1/projects/{project_id}/duplicate", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def duplicate_project(project_id: str, request: Request, db: Session = Depends(get_db)):
+    source = db.get(Project, project_id)
+    if source is None or source.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    workspace = db.get(Workspace, source.workspace_id) if source.workspace_id else _default_workspace(db)
+    claims = getattr(request.state, "user", {})
+    new_key = (source.key[:7] + "-COPY")[:12]
+    suffix = 2
+    while db.scalar(select(Project.id).where(Project.key == new_key)) is not None:
+        new_key = (source.key[: max(1, 10-len(str(suffix)))] + f"-{suffix}")[:12]
+        suffix += 1
+    now = datetime.now(timezone.utc)
+    project = Project(id=str(uuid.uuid4()), name=f"{source.name} (Copy)", key=new_key,
+        description=source.description or "", workspace_id=source.workspace_id,
+        owner_user_id=claims.get("sub") or source.owner_user_id, category=source.category,
+        status="Active", priority=source.priority, start_date=source.start_date,
+        target_date=source.target_date, objectives=source.objectives, created_at=now, updated_at=now,
+        next_requirement_number=1)
+    db.add(project)
+    db.flush()
+    document_ids: dict[str, str] = {}
+    source_documents = list(db.scalars(select(SourceDocument).where(SourceDocument.project_id == source.id)).all())
+    for document in source_documents:
+        copied_id = str(uuid.uuid4())
+        document_ids[document.id] = copied_id
+        db.add(SourceDocument(id=copied_id, project_id=project.id, filename=document.filename,
+            media_type=document.media_type, byte_size=document.byte_size, extraction_method=document.extraction_method,
+            extracted_text=document.extracted_text, candidates_json=document.candidates_json, created_at=now))
+
+    requirement_ids: dict[str, str] = {}
+    source_requirements = list(db.scalars(select(Requirement).where(
+        Requirement.project_id == source.id, Requirement.deleted_at.is_(None)
+    ).order_by(Requirement.created_at, Requirement.id)).all())
+    for number, original in enumerate(source_requirements, start=1):
+        copied_id = str(uuid.uuid4())
+        requirement_ids[original.id] = copied_id
+        copied = Requirement(
+            id=copied_id, project_id=project.id,
+            source_document_id=document_ids.get(original.source_document_id),
+            code=f"{new_key}-{number:03d}", title=original.title,
+            description=original.description or "", statement=original.statement,
+            requirement_type=original.requirement_type, priority=original.priority,
+            owner_user_id=original.owner_user_id, verification_method=original.verification_method,
+            current_version=1, tags=list(original.tags or []), actor=original.actor or "",
+            preconditions=original.preconditions or "", acceptance_criteria=list(original.acceptance_criteria or []),
+            source_type=original.source_type, source_reference=original.source_reference,
+            original_text=original.original_text, status="Draft", created_at=now, updated_at=now,
+        )
+        db.add(copied)
+        snapshot = RequirementRead.model_validate(copied).model_dump(mode="json", by_alias=True)
+        version = RequirementVersion(id=str(uuid.uuid4()), project_id=project.id, requirement_id=copied.id,
+            version_number=1, snapshot_json=json.dumps(snapshot, ensure_ascii=False), created_at=now)
+        db.add(version)
+        append_audit(db, project.id, "requirement_duplicated", copied.id, {"sourceRequirementId": original.id})
+        append_sync_event(db, "requirement.upsert", "requirement", copied.id, snapshot)
+        append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+            {"id": version.id, "projectId": project.id, "requirementId": copied.id,
+             "versionNumber": 1, "snapshot": snapshot, "createdAt": now.isoformat()})
+    source_links = list(db.scalars(select(RequirementLink).where(RequirementLink.project_id == source.id)).all())
+    for link in source_links:
+        if link.source_requirement_id in requirement_ids and link.target_requirement_id in requirement_ids:
+            db.add(RequirementLink(id=str(uuid.uuid4()), project_id=project.id,
+                source_requirement_id=requirement_ids[link.source_requirement_id],
+                target_requirement_id=requirement_ids[link.target_requirement_id],
+                relationship_type=link.relationship_type, created_at=now))
+    project.next_requirement_number = len(source_requirements) + 1
+    if settings.authentication_enabled and claims.get("role") != "Admin" and _workspace_membership(db, source.workspace_id or "", claims.get("sub", "")) is None:
+        db.add(ProjectMembership(id=str(uuid.uuid4()), project_id=project.id, user_id=claims["sub"], role="Editor"))
+    append_audit(db, project.id, "project_duplicated", detail={"sourceProjectId": source.id})
+    append_audit(db, source.id, "project_duplicated", detail={"projectId": project.id})
+    append_sync_event(db, "project.upsert", "project", project.id, ProjectRead.model_validate(project).model_dump(mode="json", by_alias=True))
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@app.delete("/api/v1/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(project_id: str, db: Session = Depends(get_db)) -> Response:
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    now = datetime.now(timezone.utc)
+    project.deleted_at = now
+    project.updated_at = now
+    append_audit(db, project.id, "project_deleted", detail={"name": project.name})
+    append_sync_event(db, "project.delete", "project", project.id, {"id": project.id, "deletedAt": now.isoformat()})
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/api/v1/projects/{project_id}/members", response_model=list[ProjectMemberRead])
@@ -406,6 +701,104 @@ def remove_project_member(project_id: str, user_id: str, db: Session = Depends(g
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def extract_document_text(filename: str, content: bytes) -> tuple[str, str]:
+    suffix = Path(filename).suffix.casefold()
+    try:
+        if suffix == ".pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(content), strict=True)
+            if len(reader.pages) > 500:
+                raise HTTPException(status_code=413, detail="PDF exceeds the 500 page extraction limit")
+            chunks = []
+            for page in reader.pages:
+                chunks.append(page.extract_text() or "")
+                if sum(map(len, chunks)) > 2_000_000:
+                    raise HTTPException(status_code=413, detail="Extracted document text exceeds 2 MB")
+            text = "\n\n".join(chunks)
+            method = "pypdf"
+        elif suffix == ".docx":
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                info = archive.getinfo("word/document.xml")
+                if info.file_size > 10_000_000:
+                    raise HTTPException(status_code=413, detail="DOCX document body exceeds the 10 MB extraction limit")
+                root = ElementTree.fromstring(archive.read("word/document.xml"))
+            namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            paragraphs = ["".join(node.itertext()) for node in root.findall(".//w:p", namespace)]
+            text = "\n".join(part.strip() for part in paragraphs if part.strip())
+            method = "docx-xml"
+        elif suffix in {".txt", ".md", ".csv"}:
+            text = content.decode("utf-8-sig")
+            method = "utf-8-text"
+        else:
+            raise HTTPException(status_code=415, detail="Supported document types are PDF, DOCX, TXT, MD, and CSV")
+    except HTTPException:
+        raise
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="PDF extraction is unavailable because pypdf is not installed") from exc
+    except (UnicodeDecodeError, zipfile.BadZipFile, KeyError, ElementTree.ParseError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="The document is invalid or could not be read") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="The document is invalid, encrypted, or could not be read") from exc
+    normalized = "\n".join(line.rstrip() for line in text.replace("\x00", "").splitlines()).strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="No readable text was found in the document")
+    if len(normalized) > 2_000_000:
+        raise HTTPException(status_code=413, detail="Extracted document text exceeds 2 MB")
+    return normalized, method
+
+
+def document_candidates(extracted_text: str) -> list[str]:
+    lines = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip() for line in extracted_text.splitlines()]
+    lines = [line for line in lines if 24 <= len(line) <= 1200]
+    clauses = [line for line in lines if re.search(r"\b(?:shall|must|required to|needs to|can|should)\b", line, re.IGNORECASE)]
+    return (clauses or lines)[:200]
+
+
+@app.get("/api/v1/projects/{project_id}/documents", response_model=list[SourceDocumentRead])
+def list_source_documents(project_id: str, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    documents = db.scalars(select(SourceDocument).where(SourceDocument.project_id == project_id)
+        .order_by(SourceDocument.created_at.desc())).all()
+    return [{"id": item.id, "project_id": item.project_id, "filename": item.filename,
+        "media_type": item.media_type, "byte_size": item.byte_size, "extraction_method": item.extraction_method,
+        "extracted_text": item.extracted_text, "candidate_statements": json.loads(item.candidates_json),
+        "created_at": item.created_at} for item in documents]
+
+
+@app.post("/api/v1/projects/{project_id}/documents/extract", response_model=SourceDocumentRead, status_code=status.HTTP_201_CREATED)
+def extract_project_document(project_id: str, payload: DocumentExtractRequest, db: Session = Depends(get_db)):
+    if db.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    filename = payload.filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not filename or any(ord(char) < 32 for char in filename):
+        raise HTTPException(status_code=422, detail="Document filename is invalid")
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="Document content must be valid base64") from exc
+    if not content or len(content) > 10_000_000:
+        raise HTTPException(status_code=413, detail="Document must be between 1 byte and 10 MB")
+    extracted_text, method = extract_document_text(filename, content)
+    candidates = document_candidates(extracted_text)
+    document = SourceDocument(id=str(uuid.uuid4()), project_id=project_id, filename=filename,
+        media_type=payload.media_type, byte_size=len(content), extraction_method=method,
+        extracted_text=extracted_text, candidates_json=json.dumps(candidates, ensure_ascii=False),
+        created_at=datetime.now(timezone.utc))
+    db.add(document)
+    append_audit(db, project_id, "source_document_extracted", detail={"documentId": document.id,
+        "filename": filename, "method": method, "candidateCount": len(candidates)})
+    append_sync_event(db, "source_document.extracted", "source_document", document.id,
+        {"id": document.id, "projectId": project_id, "filename": filename,
+         "extractionMethod": method, "byteSize": len(content), "candidateCount": len(candidates)})
+    db.commit()
+    db.refresh(document)
+    return {"id": document.id, "project_id": project_id, "filename": filename,
+        "media_type": payload.media_type, "byte_size": len(content), "extraction_method": method,
+        "extracted_text": extracted_text, "candidate_statements": candidates, "created_at": document.created_at}
+
+
 @app.get("/api/v1/projects/{project_id}/requirements", response_model=list[RequirementRead])
 def list_requirements(project_id: str, db: Session = Depends(get_db)):
     if db.get(Project, project_id) is None:
@@ -427,6 +820,17 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
             raise HTTPException(status_code=404, detail="Requirement not found in this project")
         return existing
 
+    if payload.source_document_id:
+        source_document = db.get(SourceDocument, payload.source_document_id)
+        if source_document is None or source_document.project_id != project_id:
+            raise HTTPException(status_code=422, detail="Source document must belong to this project")
+    if payload.owner_user_id:
+        owner = db.get(UserAccount, payload.owner_user_id)
+        if owner is None or not owner.active:
+            raise HTTPException(status_code=422, detail="Requirement owner must be an active user")
+        if settings.authentication_enabled and project.workspace_id and _workspace_membership(db, project.workspace_id, owner.id) is None:
+            raise HTTPException(status_code=422, detail="Requirement owner must belong to the project workspace")
+
     number = project.next_requirement_number
     project.next_requirement_number = number + 1
     code = payload.code or f"{project.key}-{number:03d}"
@@ -434,11 +838,17 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
     requirement = Requirement(
         id=payload.id or str(uuid.uuid4()),
         project_id=project_id,
+        source_document_id=payload.source_document_id,
         code=code,
         title=payload.title.strip(),
+        description=payload.description.strip(),
         statement=payload.statement.strip(),
         requirement_type=payload.requirement_type,
         priority=payload.priority,
+        owner_user_id=payload.owner_user_id,
+        verification_method=payload.verification_method,
+        current_version=1,
+        tags=payload.tags,
         actor=payload.actor.strip(),
         preconditions=payload.preconditions.strip(),
         acceptance_criteria=payload.acceptance_criteria,
@@ -458,6 +868,7 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
     append_sync_event(db, "requirement.upsert", "requirement", requirement.id, {
         "id": requirement.id,
         "projectId": requirement.project_id,
+        "sourceDocumentId": requirement.source_document_id,
         "code": requirement.code,
         "title": requirement.title,
         "statement": requirement.statement,
@@ -487,26 +898,38 @@ def create_requirement(project_id: str, payload: RequirementCreate, db: Session 
 
 
 @app.patch("/api/v1/requirements/{requirement_id}", response_model=RequirementRead)
-def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Session = Depends(get_db)):
+def update_requirement(requirement_id: str, payload: RequirementUpdate, request: Request, db: Session = Depends(get_db)):
     requirement = db.get(Requirement, requirement_id)
     if requirement is None:
         raise HTTPException(status_code=404, detail="Requirement not found")
-    if requirement.status in {"Approved", "Rejected"}:
-        raise HTTPException(status_code=409, detail="Approved and rejected records are read-only in Phase 1")
-
     updates = payload.model_dump(exclude_unset=True, by_alias=False)
     requested_status = updates.pop("status", None)
+    if settings.authentication_enabled and requested_status in {"Approved", "Rejected", "Verified", "Archived"} and getattr(request.state, "user", {}).get("role") != "Admin" and getattr(request.state, "workspace_role", None) not in {"Owner", "Admin"}:
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins can approve, reject, verify, or archive requirements")
+    if updates.get("owner_user_id"):
+        owner = db.get(UserAccount, updates["owner_user_id"])
+        project = db.get(Project, requirement.project_id)
+        if owner is None or not owner.active or (settings.authentication_enabled and project.workspace_id and _workspace_membership(db, project.workspace_id, owner.id) is None):
+            raise HTTPException(status_code=422, detail="Requirement owner must be an active project workspace member")
     allowed = {
-        "Draft": {"Draft", "Under review"},
-        "Under review": {"Under review", "Approved", "Rejected"},
+        "Draft": {"Draft", "Under review", "Archived"},
+        "Under review": {"Draft", "Under review", "Approved", "Rejected", "Archived"},
+        "Approved": {"Approved", "In progress", "Archived"},
+        "In progress": {"In progress", "Implemented", "Archived"},
+        "Implemented": {"Implemented", "Verified", "In progress", "Archived"},
+        "Verified": {"Verified", "In progress", "Archived"},
+        "Rejected": {"Rejected", "Draft", "Archived"},
+        "Archived": {"Archived", "Draft"},
     }
     if requested_status and requested_status not in allowed[requirement.status]:
         raise HTTPException(status_code=409, detail=f"Invalid status change: {requirement.status} → {requested_status}")
 
-    current_version = db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0
+    current_version = max(
+        requirement.current_version,
+        db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0,
+    )
     for field, value in updates.items():
-        if value is not None:
-            setattr(requirement, field, value)
+        setattr(requirement, field, value)
     requirement.updated_at = datetime.now(timezone.utc)
     if requested_status:
         requirement.status = requested_status
@@ -517,8 +940,13 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
         "Under review": "requirement_submitted_for_review",
         "Approved": "requirement_approved",
         "Rejected": "requirement_rejected",
+        "In progress": "requirement_started",
+        "Implemented": "requirement_implemented",
+        "Verified": "requirement_verified",
+        "Archived": "requirement_archived",
     }.get(requested_status, "requirement_updated")
     version_created_at = datetime.now(timezone.utc)
+    requirement.current_version = current_version + 1
     current_snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
     version = RequirementVersion(id=str(uuid.uuid4()), project_id=requirement.project_id, requirement_id=requirement.id,
         version_number=current_version + 1, snapshot_json=json.dumps(current_snapshot, ensure_ascii=False),
@@ -536,9 +964,103 @@ def update_requirement(requirement_id: str, payload: RequirementUpdate, db: Sess
         {"id": version.id, "projectId": requirement.project_id, "requirementId": requirement.id,
          "versionNumber": version.version_number, "snapshot": current_snapshot,
          "createdAt": version.created_at.isoformat()})
+    try:
+        db.commit()
+        db.refresh(requirement)
+        return requirement
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Requirement changed concurrently or violates a project constraint") from exc
+
+
+@app.patch("/api/v1/projects/{project_id}/requirements/bulk", response_model=list[RequirementRead])
+def bulk_update_requirements(project_id: str, payload: RequirementBulkUpdate, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    ids = list(dict.fromkeys(payload.requirement_ids))
+    requirements = list(db.scalars(select(Requirement).where(
+        Requirement.project_id == project_id,
+        Requirement.id.in_(ids),
+        Requirement.deleted_at.is_(None),
+    ).with_for_update()).all())
+    if len(requirements) != len(ids):
+        raise HTTPException(status_code=404, detail="One or more requirements were not found in this project")
+    updates = payload.model_dump(exclude_unset=True, exclude={"requirement_ids"})
+    if settings.authentication_enabled and updates.get("status") in {"Approved", "Rejected", "Verified", "Archived"} and getattr(request.state, "user", {}).get("role") != "Admin" and getattr(request.state, "workspace_role", None) not in {"Owner", "Admin"}:
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins can approve, reject, verify, or archive requirements")
+    if updates.get("owner_user_id"):
+        owner = db.get(UserAccount, updates["owner_user_id"])
+        if owner is None or not owner.active or (settings.authentication_enabled and project.workspace_id and _workspace_membership(db, project.workspace_id, owner.id) is None):
+            raise HTTPException(status_code=422, detail="Requirement owner must be an active project workspace member")
+    now = datetime.now(timezone.utc)
+    for requirement in requirements:
+        if "status" in updates:
+            allowed = {
+                "Draft": {"Draft", "Under review", "Archived"},
+                "Under review": {"Draft", "Under review", "Approved", "Rejected", "Archived"},
+                "Approved": {"Approved", "In progress", "Archived"},
+                "In progress": {"In progress", "Implemented", "Archived"},
+                "Implemented": {"Implemented", "Verified", "In progress", "Archived"},
+                "Verified": {"Verified", "In progress", "Archived"},
+                "Rejected": {"Rejected", "Draft", "Archived"},
+                "Archived": {"Archived", "Draft"},
+            }
+            if updates["status"] not in allowed[requirement.status]:
+                raise HTTPException(status_code=409, detail=f"Invalid status change for {requirement.code}")
+        for field, value in updates.items():
+            setattr(requirement, field, value)
+        if updates.get("status") in {"Approved", "Rejected"}:
+            requirement.reviewed_at = now
+        requirement.updated_at = now
+        version_number = max(requirement.current_version, db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0) + 1
+        requirement.current_version = version_number
+        snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
+        version = RequirementVersion(id=str(uuid.uuid4()), project_id=project_id, requirement_id=requirement.id,
+            version_number=version_number, snapshot_json=json.dumps(snapshot, ensure_ascii=False), created_at=now)
+        db.add(version)
+        append_audit(db, project_id, "requirement_bulk_updated", requirement.id, {"fields": sorted(updates)})
+        append_sync_event(db, "requirement.upsert", "requirement", requirement.id, snapshot)
+        append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+            {"id": version.id, "projectId": project_id, "requirementId": requirement.id,
+             "versionNumber": version_number, "snapshot": snapshot, "createdAt": now.isoformat()})
+    try:
+        db.commit()
+        return requirements
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Bulk update could not be applied atomically") from exc
+
+
+@app.post("/api/v1/projects/{project_id}/requirements/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+def bulk_delete_requirements(project_id: str, payload: RequirementBulkDelete, request: Request, db: Session = Depends(get_db)) -> Response:
+    claims = getattr(request.state, "user", {})
+    if settings.authentication_enabled and claims.get("role") != "Admin" and getattr(request.state, "workspace_role", None) not in {"Owner", "Admin"}:
+        raise HTTPException(status_code=403, detail="Only workspace owners/admins can bulk delete requirements")
+    ids = list(dict.fromkeys(payload.requirement_ids))
+    requirements = list(db.scalars(select(Requirement).where(
+        Requirement.project_id == project_id, Requirement.id.in_(ids), Requirement.deleted_at.is_(None)
+    ).with_for_update()).all())
+    if len(requirements) != len(ids):
+        raise HTTPException(status_code=404, detail="One or more requirements were not found in this project")
+    now = datetime.now(timezone.utc)
+    for requirement in requirements:
+        requirement.deleted_at = now
+        requirement.updated_at = now
+        version_number = max(requirement.current_version, db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0) + 1
+        requirement.current_version = version_number
+        snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
+        version = RequirementVersion(id=str(uuid.uuid4()), project_id=project_id, requirement_id=requirement.id,
+            version_number=version_number, snapshot_json=json.dumps(snapshot, ensure_ascii=False), created_at=now)
+        db.add(version)
+        append_audit(db, project_id, "requirement_deleted", requirement.id, {"code": requirement.code, "bulk": True})
+        append_sync_event(db, "requirement.delete", "requirement", requirement.id,
+            {"id": requirement.id, "projectId": project_id, "deletedAt": now.isoformat()})
+        append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+            {"id": version.id, "projectId": project_id, "requirementId": requirement.id,
+             "versionNumber": version_number, "snapshot": snapshot, "createdAt": now.isoformat()})
     db.commit()
-    db.refresh(requirement)
-    return requirement
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.delete("/api/v1/requirements/{requirement_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -549,12 +1071,23 @@ def delete_requirement(requirement_id: str, db: Session = Depends(get_db)) -> Re
 
     deleted_at = datetime.now(timezone.utc)
     requirement.deleted_at = deleted_at
+    requirement.updated_at = deleted_at
+    version_number = max(requirement.current_version, db.scalar(select(func.max(RequirementVersion.version_number)).where(RequirementVersion.requirement_id == requirement.id)) or 0) + 1
+    requirement.current_version = version_number
+    snapshot = RequirementRead.model_validate(requirement).model_dump(mode="json", by_alias=True)
+    version = RequirementVersion(id=str(uuid.uuid4()), project_id=requirement.project_id,
+        requirement_id=requirement.id, version_number=version_number,
+        snapshot_json=json.dumps(snapshot, ensure_ascii=False), created_at=deleted_at)
+    db.add(version)
     append_audit(db, requirement.project_id, "requirement_deleted", requirement.id, {"code": requirement.code})
     append_sync_event(db, "requirement.delete", "requirement", requirement.id, {
         "id": requirement.id,
         "projectId": requirement.project_id,
         "deletedAt": deleted_at.isoformat(),
     })
+    append_sync_event(db, "requirement_version.created", "requirement_version", version.id,
+        {"id": version.id, "projectId": requirement.project_id, "requirementId": requirement.id,
+         "versionNumber": version_number, "snapshot": snapshot, "createdAt": deleted_at.isoformat()})
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

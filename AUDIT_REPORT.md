@@ -23,7 +23,8 @@ been verified unless explicitly stated.
 |---|---|---|
 | Navigation and routes | Overview, projects, requirements, intake, project settings/access, traceability, tests, defects, AI, assistant, GitHub, reports, automation, and not-found route | Routes are implemented in `src/App.tsx`; automated browser route/form coverage is absent. Authentication appears as a sign-in gate rather than a URL route; global account lifecycle has no dedicated page. |
 | Dashboard | Project and requirement KPIs, test/run/defect metrics, status distribution, recent audit activity, refresh | Uses persisted API data. Date filters, trend charts, and a richer activity feed remain open. |
-| Requirements | CRUD/review, soft delete, filtering, sorting, pagination, CSV import/export, bulk priority, history, comments, R-R relationships | Persisted API behavior is tested. Excel/PDF export, tags, assignment, and generalized bulk editing remain open. Document intake stores a source reference and manually entered text; it does not parse or upload the selected file. |
+| Requirements | Ten categories, eight states, description/statement, owner, verification method, tags, version number/history, approval lifecycle, source extraction/provenance, search/filter/sort/pagination, configurable columns, inline priority/status edit, generalized bulk update/delete, CSV import/export, comments, R-R links | SQLite API behavior, version/audit writes, source extraction, bulk transactions, and workspace access are tested. OCR and Excel/PDF exports remain open. Uploaded binary data is discarded after supported text extraction; extracted text is persisted. |
+| Projects and workspaces | Project CRUD, archive/restore/duplicate, category/owner/team/status/priority/dates/objectives, workspace membership and role boundaries | API CRUD and member isolation are tested. Project owner/team controls and broader workspace management UI remain limited; routes and data model are available. |
 | AI intelligence | Structured requirement analysis, history, heuristic fallback, criteria recommendations, reviewable test suggestions | Fallback/schema behavior is tested. Live provider behavior needs credentials and has not been verified. Duplicate/contradiction analysis across the corpus and accept/reject/edit for all suggestion types remain open. |
 | Traceability | Requirement relationship links, test cases, latest runs, defects, GitHub requirement references, orphan/test coverage, failed case metrics | API and UI matrix implemented. A knowledge graph now renders persisted requirement, test, defect, and linked GitHub records with search, type filters, zoom, and record details. Design components and development task references are not modeled; graph pan/drag, path highlighting, export, and minimap remain open. |
 | Test management | Manual case CRUD, requirement links, ordered steps, AI suggestions, execution status/history | API checks cover cases, runs, and suggestion persistence behavior. Test suites, assignment, priorities/types, attachments, and automated execution remain open. |
@@ -32,9 +33,9 @@ been verified unless explicitly stated.
 | Assistant | Project-scoped stored conversations, retrieval from project records, cited sources, local fallback | API tests cover fallback/history/scoping. Live AI calls, streaming, regenerate, copy, and richer context selection are unverified or absent. |
 | Reports | Persisted requirement, test execution, and defect views; CSV export | CSV path is implemented. PDF/XLSX, AI analysis report, filters, and scheduled reports remain open. |
 | Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
-| Database and migrations | Project/domain schema, foreign keys and indexes, Alembic revisions, local SQLite plus PostgreSQL and Oracle adapters | SQLite migrations pass; PostgreSQL DDL and offline migration SQL compile. Live PostgreSQL/Oracle upgrades, rollback, and backup/restore remain unverified. |
+| Database and migrations | Workspaces/memberships, project lifecycle metadata, requirement detail/tags/version number, foreign keys and indexes, forward revision `20261124_0014`, SQLite/PostgreSQL/Oracle adapters | SQLite migration upgrades and preservation tests pass; PostgreSQL offline generation command completes, but the legacy bootstrap/offline path does not emit the new revision DDL. Apply upgrades online with `python -m app.init_db`. Live PostgreSQL/Oracle upgrades and backup/restore remain unverified. The historical bootstrap still creates current ORM metadata for a fresh online database; use the new revisions to upgrade existing installations. |
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
-| Security | Loopback sidecar default, server-side secrets, parameterized SQLAlchemy, React escaping, input schemas, audit events; signed-token auth, account and project-member APIs, route-based membership guards, role checks, in-process request limits, current-account token checks, configurable CORS origins | PostgreSQL and Oracle modes require bearer auth. Admin can assign Editor/Viewer membership; non-admin project lists and project/record routes are membership-scoped. Deactivation and role changes now affect existing tokens immediately. Password reset, distributed rate limiting, exhaustive route-family authorization tests, organization tenancy, CSRF (cookie mode), and deployment hardening remain open. **Do not expose the API or database service publicly.** No upload endpoint exists. Local browser/SQLite data is not encrypted. |
+| Security | Loopback sidecar default, server-side secrets, input schemas, signed-token auth, workspace Owner/Admin/Editor/Viewer roles, explicit project-member access, per-request current-account validation, configurable CORS, audit events | Workspace owner/admin manages team members, project archive/restore/delete, and approval/rejection/verification; Editors create and update; Viewers read only. System Admin has global access. Tests cover workspace isolation and Viewer write rejection. Password reset, distributed rate limiting, organization tenancy, external identity lifecycle, full security review, and deployment hardening remain open. **Do not expose the API or database service publicly.** Document extraction has bounded input and persists text/provenance; binaries are discarded. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
 | Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | 29 backend tests pass after Phase 01; `tsc --noEmit` and Vite production build pass. PostgreSQL Alembic offline SQL compilation passes without duplicate table creation. The 2026-11-20 audit recorded zero production npm vulnerabilities and a manual route smoke check. One Starlette/httpx deprecation warning remains. No repeat desktop packaging after the current changes, frontend automated E2E suite, live PostgreSQL server test, or clean-machine installer verification. |
 
@@ -44,8 +45,9 @@ been verified unless explicitly stated.
 |---|---|
 | `/` | Persisted workspace overview |
 | `/projects`, `/new-project` | Project list/switching and creation |
-| `/requirements` | Search, filter, sort, page, import/export, bulk priority, edit/review/history/comments |
-| `/intake` | Manual, conversation, and document-referenced text intake; document parsing is not implemented |
+| `/projects` lifecycle controls | Rename, duplicate, archive/restore, delete; workspace creation and selection for new projects |
+| `/requirements` | Search, status/priority filters, sort, page, configurable columns, inline status/priority, import/export, bulk priority/status/owner/tags/delete, edit/review/history/comments |
+| `/intake` | Manual, conversation, PDF/DOCX/TXT/MD/CSV extraction, candidate selection, and source-linked requirement creation |
 | `/project` | Active project details |
 | `/traceability` | Requirement, test, run, defect, and GitHub reference matrix |
 | `/knowledge-graph` | Interactive persisted-record graph for requirements, tests, defects, and GitHub references; search, entity filter, zoom, selection, and details |
@@ -63,13 +65,14 @@ been verified unless explicitly stated.
 | Module | Previous state | Changes in this implementation | Final status |
 |---|---|---|---|
 | Dashboard | Basic project/requirement view | Persisted requirement, test/run, defect, status, and activity metrics | Implemented for current data; filters and trend charts remain open |
-| Requirements | Manual create/list/review | CRUD/review, filters/sort/paging, CSV import/export, bulk priority, versions, comments, R-R links | Core workflows tested; Excel/PDF, tags, assignment remain open |
+| Requirements | Manual create/list/review | Expanded categories/states, description/assignment/verification/tags, source extraction and provenance, versioned edits and deletes, transactional audit history, inline editing, configurable columns, generalized bulk operations | Core workflows tested; OCR and Excel/PDF exports remain open |
+| Projects and workspaces | Project create/list and per-project membership | Workspace/team membership model and boundaries; project update/archive/restore/duplicate/delete; project metadata and workspace selection | API workflows and access isolation tested; workspace member UI and project detail tabs remain open |
 | AI Intelligence | No provider analysis | Structured analysis, stored history, fallback, criteria recommendations, reviewable test suggestions | Fallback/schema tested; live provider and broader AI checks unverified |
 | Traceability | Requirement-only links | Matrix includes linked tests, latest runs, defects, GitHub references, relationship/test coverage | Implemented/tested; design and task refs absent |
 | Test Management | No persisted cases | Case CRUD, AI suggestions, manual execution history | Core API tested; suites, assignment, automation remain open |
 | GitHub | No integration | Server-side token, manual read-only import and requirement links | Mock tested; live account, OAuth, webhooks unverified/absent |
 | AI Assistant | No grounded assistant | Project-record retrieval, citations, stored conversations, local fallback | API fallback/history/scoping tested; live provider and streaming incomplete |
-| Authentication and access | No accounts or API authorization | PBKDF2 accounts, signed expiring tokens, Admin/Editor/Viewer roles, per-project Editor/Viewer membership, filtered project lists and record-route checks; project settings can create accounts and manage membership | Core boundaries tested; global account lifecycle UI, password reset, immediate revocation, exhaustive endpoint audit, and deployment hardening remain open |
+| Authentication and access | No accounts or API authorization | PBKDF2 accounts, signed expiring tokens, system Admin roles, workspace Owner/Admin/Editor/Viewer roles, explicit legacy project membership, scoped project and record routes | Workspace isolation tests pass; global account lifecycle UI, password reset, external identity, and deployment hardening remain open |
 
 This summary does not imply production readiness. The security and verification
 gates below still apply.
@@ -90,25 +93,23 @@ gates below still apply.
    tests do not prove live credentials, quotas, account permissions, or
    provider compatibility.
 4. Full traceability is not available for design components or development
-   tasks. Test suites, user assignment, broader defect workflows, PDF/XLSX,
-   automation scheduling, and file parsing remain incomplete.
+   tasks. Test suites, broader defect workflows, OCR, PDF/XLSX exports, and
+   automation scheduling remain incomplete.
 5. The desktop packaging build passed locally, but installation, upgrade,
    persistence retention, signing, and uninstall behavior need a clean Windows
    machine test.
 
 ## Verification record
 
-For the 2026-11-24 Phase 01 update:
+For the 2026-11-25 workspace, lifecycle, and requirement workflow update:
 
-- Backend suite: 29 passed, with one Starlette/httpx deprecation warning.
-- `npm exec tsc -- --noEmit`, `npm run build`, `pip check`, and Python
-  compilation passed.
-- PostgreSQL adapter URL selection and all mapped table DDL compile locally.
-  Alembic generated offline PostgreSQL SQL through revision `20261118_0012`
-  (20 unique tables). A live PostgreSQL server was not available, so this does not
-  verify a network connection or execute schema changes in PostgreSQL.
-- The project create/list/detail API workflow is tested against an isolated
-  SQLite database and read back through a fresh SQLAlchemy session.
+- Backend suite: 37 passed, with one Starlette/httpx deprecation warning.
+- `npm exec tsc -- --noEmit` and `npm run build` passed.
+- SQLite Alembic upgrade/preservation, project lifecycle, workspace authorization,
+  requirement fields/status/version, bulk mutation, source extraction, and
+  transactional audit/version behavior are covered by isolated tests.
+- PostgreSQL offline generation completes; no live PostgreSQL or Oracle database
+  was available to execute revision `20261124_0014`.
 
 For the 2026-11-20 audit slice:
 

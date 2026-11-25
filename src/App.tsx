@@ -7,12 +7,12 @@ import {
   ListChecks, LogOut, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
   Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
-import { addProjectMember, connectBackend, createUserAccount, getCurrentUser, getProjectMembers, getUserAccounts, hasAuthSession, login, logout, pendingWriteCount, queueWrite, removeProjectMember } from './services/persistence';
-import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, generateTestCaseSuggestions, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
-import type { AuditRecord, AuthIdentity, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, ProjectMemberRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot, UserAccountRecord } from './services/persistence';
+import { addProjectMember, bulkDeleteRequirements, bulkUpdateRequirements, connectBackend, createWorkspace as createWorkspaceApi, createUserAccount, duplicateProject as duplicateProjectApi, getCurrentUser, getProjectMembers, getUserAccounts, getWorkspaces, hasAuthSession, login, logout, pendingWriteCount, queueWrite, removeProjectMember } from './services/persistence';
+import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, extractProjectDocument, generateTestCaseSuggestions, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectDocuments, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
+import type { AuditRecord, AuthIdentity, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, ProjectMemberRecord, ProjectRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, SourceDocumentRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot, UserAccountRecord, WorkspaceRecord } from './services/persistence';
 
-type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'Rejected';
-type RequirementType = 'Functional' | 'Non-functional' | 'Security' | 'Performance' | 'Usability';
+type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'In progress' | 'Implemented' | 'Verified' | 'Rejected' | 'Archived';
+type RequirementType = 'Functional' | 'Non-functional' | 'Performance' | 'Security' | 'Usability' | 'Technical' | 'Interface' | 'Business' | 'Regulatory' | 'Constraint';
 type Priority = 'Critical' | 'High' | 'Medium' | 'Low';
 type SourceType = 'Conversation' | 'Document' | 'Manual';
 
@@ -22,16 +22,32 @@ interface Project {
   key: string;
   description: string;
   createdAt: string;
+  workspaceId?: string | null;
+  ownerUserId?: string | null;
+  category?: string;
+  status?: 'Active' | 'On hold' | 'Completed' | 'Archived';
+  priority?: Priority;
+  startDate?: string | null;
+  targetDate?: string | null;
+  objectives?: string;
+  archivedAt?: string | null;
+  updatedAt?: string;
 }
 
 interface Requirement {
   id: string;
   code: string;
   projectId: string;
+  sourceDocumentId?: string | null;
   title: string;
+  description?: string;
   statement: string;
   type: RequirementType;
   priority: Priority;
+  ownerUserId?: string | null;
+  verificationMethod?: 'Test' | 'Inspection' | 'Analysis' | 'Demonstration';
+  currentVersion?: number;
+  tags?: string[];
   actor: string;
   preconditions: string;
   acceptanceCriteria: string[];
@@ -45,7 +61,7 @@ interface Requirement {
 }
 
 const STORAGE = { projects: 'reqtrace.projects.v1', requirements: 'reqtrace.requirements.v1', remoteProjects: 'reqtrace.oracle.projects.v1', remoteRequirements: 'reqtrace.oracle.requirements.v1', selected: 'reqtrace.selectedProject.v1' };
-const TYPES: RequirementType[] = ['Functional', 'Non-functional', 'Security', 'Performance', 'Usability'];
+const TYPES: RequirementType[] = ['Functional', 'Non-functional', 'Performance', 'Security', 'Usability', 'Technical', 'Interface', 'Business', 'Regulatory', 'Constraint'];
 const PRIORITIES: Priority[] = ['Critical', 'High', 'Medium', 'Low'];
 
 function readStorage<T>(key: string, fallback: T): T {
@@ -68,7 +84,8 @@ function normalizeRequirements(projects: Project[], cached = readStorage<unknown
     const sourceType: SourceType = sourceValue.toLowerCase().includes('document') ? 'Document' : sourceValue.toLowerCase().includes('conversation') || sourceValue.toLowerCase().includes('chat') ? 'Conversation' : 'Manual';
     const rawType = String(entry.type ?? entry.category ?? 'Functional');
     const type: RequirementType = (TYPES as string[]).includes(rawType) ? rawType as RequirementType : rawType === 'Non-Functional' ? 'Non-functional' : 'Functional';
-    const status: RequirementStatus = statusValue === 'approved' ? 'Approved' : statusValue === 'rejected' ? 'Rejected' : statusValue === 'under review' ? 'Under review' : 'Draft';
+    const statuses: RequirementStatus[] = ['Draft', 'Under review', 'Approved', 'In progress', 'Implemented', 'Verified', 'Rejected', 'Archived'];
+    const status = statuses.find((value) => value.toLowerCase() === statusValue) ?? 'Draft';
     const id = /^[0-9a-f-]{36}$/i.test(legacyId) ? legacyId : makeId();
     const sourceReference = String(entry.sourceReference ?? entry.source ?? (sourceType === 'Manual' ? 'Manual entry' : sourceType));
     const originalText = String(entry.originalText ?? entry.originalSourceText ?? entry.statement ?? entry.description ?? '');
@@ -76,10 +93,16 @@ function normalizeRequirements(projects: Project[], cached = readStorage<unknown
       id,
       code: String(entry.code ?? (legacyId && id !== legacyId ? legacyId : `REQ-${String(index + 1).padStart(3, '0')}`)),
       projectId: String(entry.projectId ?? projects[0]?.id ?? ''),
+      sourceDocumentId: typeof entry.sourceDocumentId === 'string' ? entry.sourceDocumentId : null,
       title: String(entry.title ?? 'Untitled requirement'),
+      description: String(entry.description ?? ''),
       statement: String(entry.statement ?? entry.description ?? ''),
       type,
       priority: (PRIORITIES as string[]).includes(String(entry.priority)) ? String(entry.priority) as Priority : 'Medium',
+      ownerUserId: typeof entry.ownerUserId === 'string' ? entry.ownerUserId : null,
+      verificationMethod: (['Test', 'Inspection', 'Analysis', 'Demonstration'] as string[]).includes(String(entry.verificationMethod)) ? String(entry.verificationMethod) as Requirement['verificationMethod'] : 'Test',
+      currentVersion: Number(entry.currentVersion ?? 1),
+      tags: Array.isArray(entry.tags) ? entry.tags.map(String) : [],
       actor: String(entry.actor ?? ''),
       preconditions: String(entry.preconditions ?? ''),
       acceptanceCriteria: Array.isArray(entry.acceptanceCriteria) ? entry.acceptanceCriteria.map(String) : [],
@@ -106,6 +129,7 @@ function App() {
   const [pendingCount, setPendingCount] = useState(() => pendingWriteCount());
   const [syncError, setSyncError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const nextRequirementNumbers = useRef<Record<string, number>>({});
   const currentProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
 
@@ -125,7 +149,7 @@ function App() {
       if (syncing) return syncing;
       const localProjects = readStorage<Project[]>(STORAGE.projects, []);
       const localRequirements = normalizeRequirements(localProjects);
-      syncing = connectBackend(localProjects, localRequirements).then((snapshot) => {
+      syncing = connectBackend(localProjects, localRequirements).then(async (snapshot) => {
       if (!active) return;
       setBackendState(snapshot.online ? 'online' : 'offline');
       setBackendDatabase(snapshot.database === 'oracle' ? 'oracle' : snapshot.database === 'sqlite' ? 'sqlite' : null);
@@ -135,6 +159,7 @@ function App() {
         setProjects(snapshot.projects);
         setRequirements(snapshot.requirements);
         setAuthRequired(false);
+        try { setWorkspaces(await getWorkspaces()); } catch { setWorkspaces([]); }
       }
       }).finally(() => { syncing = null; });
       return syncing;
@@ -150,10 +175,40 @@ function App() {
   useEffect(() => localStorage.setItem(STORAGE.selected, selectedProjectId), [selectedProjectId]);
 
   const createProject = (project: Omit<Project, 'id' | 'createdAt'>) => {
-    const created = { ...project, id: makeId(), createdAt: new Date().toISOString() };
+    const created: Project = { ...project, category: project.category ?? 'General', status: project.status ?? 'Active', priority: project.priority ?? 'Medium', objectives: project.objectives ?? '', id: makeId(), createdAt: new Date().toISOString() };
     setProjects((items) => [...items, created]);
     setSelectedProjectId(created.id);
     void queueWrite('POST', '/projects', created as unknown as Record<string, unknown>).then(updateConnectionStatus);
+  };
+
+  const createWorkspace = async (name: string, key: string) => {
+    const workspace = await createWorkspaceApi(name, key);
+    setWorkspaces((items) => [...items.filter((item) => item.id !== workspace.id), workspace]);
+    return workspace;
+  };
+
+  const changeProject = async (id: string, updates: Partial<ProjectRecord>) => {
+    setProjects((items) => items.map((item) => item.id === id ? { ...item, ...updates, updatedAt: new Date().toISOString() } : item));
+    const result = await queueWrite('PATCH', `/projects/${id}`, updates as Record<string, unknown>);
+    updateConnectionStatus(result);
+  };
+  const archiveCurrentProject = async (id: string) => {
+    const archivedAt = new Date().toISOString();
+    setProjects((items) => items.map((item) => item.id === id ? { ...item, status: 'Archived', archivedAt, updatedAt: archivedAt } : item));
+    updateConnectionStatus(await queueWrite('POST', `/projects/${id}/archive`));
+  };
+  const duplicateCurrentProject = async (id: string) => {
+    try { const created = await duplicateProjectApi(id); setProjects((items) => [...items, created]); }
+    catch (error) { setSyncError(error instanceof Error ? error.message : 'Project duplication failed.'); }
+  };
+  const restoreArchivedProject = async (id: string) => {
+    const updatedAt = new Date().toISOString();
+    setProjects((items) => items.map((item) => item.id === id ? { ...item, status: 'Active', archivedAt: null, updatedAt } : item));
+    updateConnectionStatus(await queueWrite('POST', `/projects/${id}/restore`));
+  };
+  const removeCurrentProject = async (id: string) => {
+    setProjects((items) => items.filter((item) => item.id !== id));
+    updateConnectionStatus(await queueWrite('DELETE', `/projects/${id}`));
   };
 
   const createRequirement = (record: Omit<Requirement, 'id' | 'code' | 'projectId' | 'createdAt' | 'status'>) => {
@@ -174,13 +229,26 @@ function App() {
   };
 
   const updateRequirement = (id: string, updates: Partial<Requirement>) => {
-    setRequirements((items) => items.map((item) => item.id === id ? { ...item, ...updates, updatedAt: new Date().toISOString() } : item));
+    setRequirements((items) => items.map((item) => item.id === id ? { ...item, ...updates, currentVersion: (item.currentVersion ?? 1) + 1, updatedAt: new Date().toISOString() } : item));
     void queueWrite('PATCH', `/requirements/${id}`, updates as Record<string, unknown>).then(updateConnectionStatus);
   };
 
   const deleteRequirement = (id: string) => {
     setRequirements((items) => items.filter((item) => item.id !== id));
     void queueWrite('DELETE', `/requirements/${id}`).then(updateConnectionStatus);
+  };
+
+  const applyBulkRequirementUpdate = async (ids: string[], updates: Partial<Requirement>) => {
+    if (!currentProject) return;
+    const { online, database, pending, error } = await bulkUpdateRequirements(currentProject.id, ids, updates as Record<string, unknown>);
+    setRequirements((items) => items.map((item) => ids.includes(item.id) ? { ...item, ...updates, currentVersion: (item.currentVersion ?? 1) + 1, updatedAt: new Date().toISOString() } : item));
+    updateConnectionStatus({ online, database, pending, error });
+  };
+  const applyBulkRequirementDelete = async (ids: string[]) => {
+    if (!currentProject) return;
+    const { online, database, pending, error } = await bulkDeleteRequirements(currentProject.id, ids);
+    setRequirements((items) => items.filter((item) => !ids.includes(item.id)));
+    updateConnectionStatus({ online, database, pending, error });
   };
 
   const createRequirementLink = async (sourceId: string, targetId: string, relationshipType: string) => {
@@ -200,18 +268,26 @@ function App() {
     setBackendDatabase(result.database === 'oracle' ? 'oracle' : result.database === 'sqlite' ? 'sqlite' : null);
     setPendingCount(result.pending);
     setSyncError(result.error);
+    if (result.online && result.error) window.dispatchEvent(new Event('online'));
   }
 
   return (
     <BrowserRouter>
       {authRequired ? <AuthenticationGate onSuccess={() => { window.dispatchEvent(new Event('online')); }} onLogout={logout} /> : backendState === 'checking' ? <div className="welcome-screen"><section className="welcome-card"><div className="eyebrow">WORKSPACE</div><h1>Connecting to ReqTrace…</h1><p>Checking authentication and project storage.</p></section></div> : !currentProject ? (
-        <ProjectWelcome onCreate={createProject} />
+        <ProjectWelcome onCreate={createProject} workspaces={workspaces} onCreateWorkspace={createWorkspace} />
       ) : (
         <Workspace
           projects={projects}
           project={currentProject}
           onSelectProject={setSelectedProjectId}
           onCreateProject={createProject}
+          workspaces={workspaces}
+          onCreateWorkspace={createWorkspace}
+          onUpdateProject={changeProject}
+          onArchiveProject={archiveCurrentProject}
+          onDuplicateProject={duplicateCurrentProject}
+          onDeleteProject={removeCurrentProject}
+          onRestoreProject={restoreArchivedProject}
           backendState={backendState}
           backendDatabase={backendDatabase}
           pendingCount={pendingCount}
@@ -220,6 +296,8 @@ function App() {
           createRequirement={createRequirement}
           updateRequirement={updateRequirement}
           deleteRequirement={deleteRequirement}
+          bulkUpdateRequirements={applyBulkRequirementUpdate}
+          bulkDeleteRequirements={applyBulkRequirementDelete}
           createRequirementLink={createRequirementLink}
           deleteRequirementLink={deleteRequirementLink}
         />
@@ -254,6 +332,13 @@ interface WorkspaceProps {
   project: Project;
   onSelectProject: (id: string) => void;
   onCreateProject: (project: Omit<Project, 'id' | 'createdAt'>) => void;
+  workspaces: WorkspaceRecord[];
+  onCreateWorkspace: (name: string, key: string) => Promise<WorkspaceRecord>;
+  onUpdateProject: (id: string, updates: Partial<ProjectRecord>) => void;
+  onArchiveProject: (id: string) => void;
+  onDuplicateProject: (id: string) => void;
+  onDeleteProject: (id: string) => void;
+  onRestoreProject: (id: string) => void;
   backendState: BackendState;
   backendDatabase: DatabaseKind;
   pendingCount: number;
@@ -262,6 +347,8 @@ interface WorkspaceProps {
   createRequirement: (record: Omit<Requirement, 'id' | 'code' | 'projectId' | 'createdAt' | 'status'>) => void;
   updateRequirement: (id: string, updates: Partial<Requirement>) => void;
   deleteRequirement: (id: string) => void;
+  bulkUpdateRequirements: (ids: string[], updates: Partial<Requirement>) => Promise<void>;
+  bulkDeleteRequirements: (ids: string[]) => Promise<void>;
   createRequirementLink: (sourceId: string, targetId: string, relationshipType: string) => Promise<{ online: boolean; error: string | null }>;
   deleteRequirementLink: (sourceId: string, linkId: string) => Promise<{ online: boolean; error: string | null }>;
 }
@@ -336,8 +423,8 @@ function Workspace(props: WorkspaceProps) {
         <div className="page-content">
           <Routes>
             <Route path="/" element={<Overview project={props.project} requirements={props.requirements} projectCount={props.projects.length} />} />
-            <Route path="/projects" element={<ProjectsPage projects={props.projects} currentProject={props.project} onSelect={(id) => { props.onSelectProject(id); navigate('/'); }} onCreate={() => navigate('/new-project')} />} />
-            <Route path="/requirements" element={<RequirementsPage requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} createRequirement={props.createRequirement} />} />
+            <Route path="/projects" element={<ProjectsPage projects={props.projects} currentProject={props.project} workspaces={props.workspaces} onCreateWorkspace={props.onCreateWorkspace} onSelect={(id) => { props.onSelectProject(id); navigate('/'); }} onCreate={() => navigate('/new-project')} onUpdateProject={props.onUpdateProject} onArchiveProject={props.onArchiveProject} onRestoreProject={props.onRestoreProject} onDuplicateProject={props.onDuplicateProject} onDeleteProject={props.onDeleteProject} />} />
+            <Route path="/requirements" element={<RequirementsPage projectId={props.project.id} requirements={props.requirements} updateRequirement={props.updateRequirement} deleteRequirement={props.deleteRequirement} createRequirement={props.createRequirement} bulkUpdate={props.bulkUpdateRequirements} bulkDelete={props.bulkDeleteRequirements} />} />
             <Route path="/ai" element={<AIIntelligencePage project={props.project} requirements={props.requirements} updateRequirement={props.updateRequirement} />} />
             <Route path="/assistant" element={<AssistantPage project={props.project} />} />
             <Route path="/github" element={<GitHubPage project={props.project} requirements={props.requirements} />} />
@@ -349,7 +436,7 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/intake" element={<IntakePage project={props.project} createRequirement={props.createRequirement} />} />
             <Route path="/project" element={<ProjectSettings project={props.project} />} />
-            <Route path="/new-project" element={<NewProjectPage onCreate={(record) => { props.onCreateProject(record); navigate('/'); }} />} />
+            <Route path="/new-project" element={<NewProjectPage onCreate={(record) => { props.onCreateProject(record); navigate('/'); }} workspaces={props.workspaces} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
@@ -358,40 +445,49 @@ function Workspace(props: WorkspaceProps) {
   );
 }
 
-function ProjectWelcome({ onCreate }: { onCreate: WorkspaceProps['onCreateProject'] }) {
+function ProjectWelcome({ onCreate, workspaces, onCreateWorkspace }: { onCreate: WorkspaceProps['onCreateProject']; workspaces: WorkspaceRecord[]; onCreateWorkspace: WorkspaceProps['onCreateWorkspace'] }) {
   return <div className="welcome-screen"><div className="welcome-card">
     <div className="brand-lockup welcome-brand"><span className="brand-mark"><GitBranch size={19} /></span><span className="brand-name">reqtrace<span className="brand-period">.</span></span></div>
     <div className="eyebrow"><span className="local-dot" /> START WITH A PROJECT</div>
     <h1>Keep every requirement<br />connected to its source.</h1>
     <p>Create a project to capture requirements, review drafts, and establish an approved baseline.</p>
-    <NewProjectForm onCreate={onCreate} primaryLabel="Create project" />
+    <NewProjectForm onCreate={onCreate} primaryLabel="Create project" workspaces={workspaces} />
+    <CreateWorkspaceForm onCreate={onCreateWorkspace} />
     <div className="welcome-foot"><ShieldCheck size={14} /> Your project is kept in the browser until the local API is available to persist it.</div>
   </div></div>;
 }
 
-function NewProjectPage({ onCreate }: { onCreate: WorkspaceProps['onCreateProject'] }) {
-  return <div className="narrow-page"><div className="eyebrow">PROJECT SETUP</div><h1 className="page-heading">Create a project</h1><p className="page-subheading">Start with a project space for requirements and their source history.</p><section className="surface form-surface"><NewProjectForm onCreate={onCreate} primaryLabel="Create project" /></section></div>;
+function NewProjectPage({ onCreate, workspaces }: { onCreate: WorkspaceProps['onCreateProject']; workspaces: WorkspaceRecord[] }) {
+  return <div className="narrow-page"><div className="eyebrow">PROJECT SETUP</div><h1 className="page-heading">Create a project</h1><p className="page-subheading">Start with a project space for requirements and their source history.</p><section className="surface form-surface"><NewProjectForm onCreate={onCreate} primaryLabel="Create project" workspaces={workspaces} /></section></div>;
 }
 
-function NewProjectForm({ onCreate, primaryLabel }: { onCreate: WorkspaceProps['onCreateProject']; primaryLabel: string }) {
+function NewProjectForm({ onCreate, primaryLabel, workspaces = [] }: { onCreate: WorkspaceProps['onCreateProject']; primaryLabel: string; workspaces?: WorkspaceRecord[] }) {
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
   const [description, setDescription] = useState('');
+  const [workspaceId, setWorkspaceId] = useState('');
   const [error, setError] = useState('');
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const cleanName = name.trim();
     const cleanKey = key.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
     if (!cleanName || !cleanKey) { setError('Add a project name and a short project key.'); return; }
-    onCreate({ name: cleanName, key: cleanKey, description: description.trim() });
+    onCreate({ name: cleanName, key: cleanKey, description: description.trim(), ...(workspaceId ? { workspaceId } : {}) });
   };
   return <form onSubmit={submit} className="form-stack">
     <label>Project name<input autoFocus value={name} onChange={(event) => { setName(event.target.value); if (!key || key === name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8)) setKey(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8)); }} placeholder="e.g. Customer portal" /></label>
     <label>Project key<input value={key} onChange={(event) => setKey(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12))} placeholder="e.g. PORTAL" /><small>Used for readable requirement IDs.</small></label>
     <label>Description <span className="optional">Optional</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="A short note about the project scope" /></label>
+    {workspaces.length > 0 && <label>Workspace<select value={workspaceId || workspaces[0].id} onChange={(event) => setWorkspaceId(event.target.value)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>}
     {error && <div className="form-error">{error}</div>}
     <button className="button button-primary button-wide" type="submit">{primaryLabel}<ArrowRight size={15} /></button>
   </form>;
+}
+
+function CreateWorkspaceForm({ onCreate }: { onCreate: WorkspaceProps['onCreateWorkspace'] }) {
+  const [open, setOpen] = useState(false); const [name, setName] = useState(''); const [key, setKey] = useState(''); const [error, setError] = useState('');
+  const submit = async (event: FormEvent) => { event.preventDefault(); setError(''); try { await onCreate(name, key); setName(''); setKey(''); setOpen(false); } catch (e) { setError(e instanceof Error ? e.message : 'Workspace could not be created.'); } };
+  return <div className="workspace-create"><button className="text-button" type="button" onClick={() => setOpen((value) => !value)}>{open ? 'Close workspace form' : 'Create a team workspace'}</button>{open && <form className="form-stack" onSubmit={submit}><label>Workspace name<input required maxLength={200} value={name} onChange={(e) => { setName(e.target.value); if (!key) setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24)); }} /></label><label>Workspace key<input required maxLength={24} value={key} onChange={(e) => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24))} /></label>{error && <div className="form-error">{error}</div>}<button className="button button-secondary" type="submit">Create workspace</button></form>}</div>;
 }
 
 function Overview({ project, requirements, projectCount }: { project: Project; requirements: Requirement[]; projectCount: number }) {
@@ -466,6 +562,10 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
   const initialSource = new URLSearchParams(location.search).get('source');
   const [source, setSource] = useState<SourceType>(initialSource === 'document' ? 'Document' : initialSource === 'conversation' ? 'Conversation' : 'Manual');
   const [file, setFile] = useState<File | null>(null);
+  const [sourceDocument, setSourceDocument] = useState<SourceDocumentRecord | null>(null);
+  const [documents, setDocuments] = useState<SourceDocumentRecord[]>([]);
+  const [extracting, setExtracting] = useState(false);
+  const [extractCandidates, setExtractCandidates] = useState<string[]>([]);
   const [pageReference, setPageReference] = useState('');
   const [title, setTitle] = useState('');
   const [statement, setStatement] = useState('');
@@ -477,19 +577,47 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
+  const refreshDocuments = async () => {
+    try { setDocuments(await getProjectDocuments(project.id)); } catch { setDocuments([]); }
+  };
+  useEffect(() => { void refreshDocuments(); }, [project.id]);
+
+  const selectDocument = async (selectedFile: File | null) => {
+    setFile(selectedFile);
+    setSourceDocument(null);
+    setExtractCandidates([]);
+    setStatement('');
+    setError('');
+    if (!selectedFile) return;
+    if (selectedFile.size > 10_000_000) { setError('Choose a document smaller than 10 MB.'); return; }
+    setExtracting(true);
+    try {
+      const document = await extractProjectDocument(project.id, selectedFile);
+      setSourceDocument(document);
+      setExtractCandidates(document.candidateStatements);
+      if (document.candidateStatements[0]) setStatement(document.candidateStatements[0]);
+      else setStatement(document.extractedText.slice(0, 1200));
+      await refreshDocuments();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not extract this document.');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (source === 'Document' && !file) { setError('Choose a PDF or DOCX file to keep its source reference.'); return; }
+    if (source === 'Document' && (!file || !sourceDocument)) { setError('Choose a readable document and wait for extraction to finish.'); return; }
     if (!statement.trim()) { setError(source === 'Conversation' ? 'Enter the conversation message you want to capture.' : 'Add a requirement statement.'); return; }
     const originalText = statement.trim();
     const derivedTitle = title.trim() || originalText.replace(/\s+/g, ' ').split(/[.!?\n]/)[0].slice(0, 90) || 'Untitled requirement';
     const sourceReference = source === 'Document' ? `${file?.name}${pageReference.trim() ? ` · ${pageReference.trim()}` : ''}` : source === 'Conversation' ? `Conversation message · ${dateLabel(new Date().toISOString())}` : 'Manual entry';
-    createRequirement({ title: derivedTitle, statement: originalText, type, priority, actor: actor.trim(), preconditions: preconditions.trim(), acceptanceCriteria: criteria.split('\n').map((item) => item.trim()).filter(Boolean), sourceType: source, sourceReference, originalText });
+    createRequirement({ title: derivedTitle, statement: originalText, type, priority, actor: actor.trim(), preconditions: preconditions.trim(), acceptanceCriteria: criteria.split('\n').map((item) => item.trim()).filter(Boolean), sourceType: source, sourceReference, originalText, sourceDocumentId: sourceDocument?.id ?? null });
     setSaved(true);
     setError('');
   };
 
-  const resetForm = () => { setTitle(''); setStatement(''); setActor(''); setPreconditions(''); setCriteria(''); setFile(null); setPageReference(''); setSaved(false); };
+  const resetForm = () => { setTitle(''); setStatement(''); setActor(''); setPreconditions(''); setCriteria(''); setFile(null); setSourceDocument(null); setExtractCandidates([]); setPageReference(''); setSaved(false); };
 
   return <div className="narrow-page intake-page">
     <div className="eyebrow">REQUIREMENT INTAKE <span className="eyebrow-divider">·</span> {project.key}</div><h1 className="page-heading">Bring project intent in</h1><p className="page-subheading">Every input becomes a draft with its original wording and source attached.</p>
@@ -497,10 +625,10 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
       <div className="intake-tabs" role="tablist" aria-label="Requirement source">
         {([['Conversation', MessageSquareText], ['Document', Upload], ['Manual', ListChecks]] as const).map(([label, Icon]) => <button role="tab" aria-selected={source === label} className={`intake-tab${source === label ? ' selected' : ''}`} key={label} onClick={() => { setSource(label); setError(''); setSaved(false); }}><Icon size={16} />{label}</button>)}
       </div>
-      <div className="intake-description">{source === 'Conversation' ? 'Capture a project discussion or stakeholder request as a draft for review.' : source === 'Document' ? 'Attach the source document, then add the requirement text to preserve its provenance.' : 'Write a structured requirement directly into the project.'}</div>
-      {saved ? <div className="saved-panel"><div className="saved-icon"><CheckCircle2 size={21} /></div><div><b>Draft captured</b><p>It is saved in this browser and is not part of the approved baseline.</p></div><button className="button button-secondary button-small" onClick={() => navigate('/requirements')}>Review drafts<ArrowRight size={14} /></button><button className="icon-button" title="Add another" onClick={resetForm}><Plus size={16} /></button></div> : <form className="form-stack intake-form" onSubmit={submit}>
-        {source === 'Document' && <div className="document-source"><label className="file-drop"><input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span className="file-icon"><Upload size={18} /></span><b>{file ? file.name : 'Choose a PDF or DOCX'}</b><small>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · kept as a local source reference` : 'Select a source document from your device'}</small></label><label>Page or section <span className="optional">Optional</span><input value={pageReference} onChange={(event) => setPageReference(event.target.value)} placeholder="e.g. Section 4.2, page 8" /></label><div className="info-note"><CircleHelp size={15} /><span>Document parsing is not connected yet. Add the relevant text below; the file itself is not uploaded or stored by this prototype.</span></div></div>}
-        {source === 'Conversation' && <div className="info-note"><MessageSquareText size={15} /><span>No AI service is connected yet. This captures your message verbatim as one draft; it does not claim to extract or classify requirements.</span></div>}
+      <div className="intake-description">{source === 'Conversation' ? 'Capture a project discussion or stakeholder request as a draft for review.' : source === 'Document' ? 'Extract a source document, choose a candidate statement, and save it with document provenance.' : 'Write a structured requirement directly into the project.'}</div>
+      {saved ? <div className="saved-panel"><div className="saved-icon"><CheckCircle2 size={21} /></div><div><b>Draft captured</b><p>It and its source document are persisted in the project database. It is not part of the approved baseline.</p></div><button className="button button-secondary button-small" onClick={() => navigate('/requirements')}>Review drafts<ArrowRight size={14} /></button><button className="icon-button" title="Add another" onClick={resetForm}><Plus size={16} /></button></div> : <form className="form-stack intake-form" onSubmit={submit}>
+        {source === 'Document' && <div className="document-source"><label className="file-drop"><input type="file" accept=".pdf,.docx,.txt,.md,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv" onChange={(event) => { void selectDocument(event.target.files?.[0] ?? null); }} /><span className="file-icon"><Upload size={18} /></span><b>{file ? file.name : 'Choose a PDF, DOCX, TXT, MD, or CSV'}</b><small>{extracting ? 'Extracting text…' : sourceDocument ? `${(file!.size / 1024 / 1024).toFixed(2)} MB · ${sourceDocument.candidateStatements.length} candidate statements found` : 'Select a source document up to 10 MB'}</small></label><label>Page or section <span className="optional">Optional</span><input value={pageReference} onChange={(event) => setPageReference(event.target.value)} placeholder="e.g. Section 4.2, page 8" /></label>{extractCandidates.length > 0 && <div className="extracted-candidates" aria-label="Extracted candidate statements"><b>Choose an extracted statement</b>{extractCandidates.slice(0, 12).map((candidate, index) => <button type="button" className="button button-secondary button-small" key={`${index}-${candidate.slice(0, 20)}`} onClick={() => { setStatement(candidate); if (!title.trim()) setTitle(candidate.replace(/\s+/g, ' ').split(/[.!?]/)[0].slice(0, 90)); }}>{candidate.length > 180 ? `${candidate.slice(0, 180)}…` : candidate}</button>)}</div>}<div className="info-note"><CircleHelp size={15} /><span>The extracted text and source metadata are saved in the project database. The original uploaded file is discarded after extraction.</span></div></div>}
+        {source === 'Conversation' && <div className="info-note"><MessageSquareText size={15} /><span>This captures your message verbatim as a draft. After saving, use AI intelligence to assess clarity, completeness, testability, and ambiguity.</span></div>}
         <label>Requirement title <span className="optional">Optional</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Short, specific title" /></label>
         <label>{source === 'Conversation' ? 'Conversation message' : 'Requirement statement'}<textarea rows={source === 'Manual' ? 5 : 6} autoFocus={source !== 'Document'} value={statement} onChange={(event) => setStatement(event.target.value)} placeholder={source === 'Conversation' ? 'What did the stakeholder ask for? Paste or write their words here…' : 'Describe what the system must do, under which conditions, and how success can be checked…'} required /></label>
         <div className="field-grid"><label>Requirement type<select value={type} onChange={(event) => setType(event.target.value as RequirementType)}>{TYPES.map((item) => <option key={item}>{item}</option>)}</select></label><label>Priority<select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select></label></div>
@@ -511,12 +639,14 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
         <div className="form-actions"><button className="button button-primary" type="submit">Save as draft<ArrowRight size={15} /></button><span>Review and approval happen next.</span></div>
       </form>}
     </section>
-    <div className="intake-footnote"><ShieldCheck size={14} /> Captured text and project records are stored in this browser. No source is sent to a server.</div>
+    {documents.length > 0 && <section className="surface source-document-library"><div className="section-heading"><div><span className="eyebrow">PROJECT SOURCES</span><h2>Saved source documents</h2></div></div>{documents.map((document) => <details className="requirement-version" key={document.id}><summary><b>{document.filename}</b><span>{document.extractionMethod}</span><small>{dateLabel(document.createdAt)} · {document.candidateStatements.length} candidate statements</small></summary><pre>{document.extractedText.slice(0, 12000)}{document.extractedText.length > 12000 ? '\n… preview truncated' : ''}</pre></details>)}</section>}
+    <div className="intake-footnote"><ShieldCheck size={14} /> Source text, extraction results, and linked requirements are stored in the configured project database.</div>
   </div>;
 }
 
-function ProjectsPage({ projects, currentProject, onSelect, onCreate }: { projects: Project[]; currentProject: Project; onSelect: (id: string) => void; onCreate: () => void }) {
-  return <div className="narrow-page"><div className="eyebrow"><FolderKanban size={13} /> WORKSPACES</div><div className="welcome-row"><div><h1 className="page-heading">Projects</h1><p className="page-subheading">Switch between project workspaces stored in this local profile.</p></div><button className="button button-primary" onClick={onCreate}><Plus size={15} /> New project</button></div><div className="projects-grid">{projects.map((project) => <button className={`surface project-card${project.id === currentProject.id ? ' active' : ''}`} key={project.id} onClick={() => onSelect(project.id)}><span className="project-avatar">{project.key.slice(0, 2)}</span><span className="project-card-main"><b>{project.name}</b><small>{project.key} · created {dateLabel(project.createdAt)}</small><span>{project.description || 'No project description'}</span></span>{project.id === currentProject.id && <span className="phase-pill">Current</span>}</button>)}</div></div>;
+function ProjectsPage(props: { projects: Project[]; currentProject: Project; workspaces: WorkspaceRecord[]; onCreateWorkspace: WorkspaceProps['onCreateWorkspace']; onSelect: (id: string) => void; onCreate: () => void; onUpdateProject: WorkspaceProps['onUpdateProject']; onArchiveProject: WorkspaceProps['onArchiveProject']; onRestoreProject: WorkspaceProps['onRestoreProject']; onDuplicateProject: WorkspaceProps['onDuplicateProject']; onDeleteProject: WorkspaceProps['onDeleteProject'] }) {
+  const { projects, currentProject, workspaces, onCreateWorkspace, onSelect, onCreate, onUpdateProject, onArchiveProject, onRestoreProject, onDuplicateProject, onDeleteProject } = props;
+  return <div className="narrow-page"><div className="eyebrow"><FolderKanban size={13} /> WORKSPACES</div><div className="welcome-row"><div><h1 className="page-heading">Projects</h1><p className="page-subheading">Manage project lifecycle and the workspace teams they belong to.</p></div><button className="button button-primary" onClick={onCreate}><Plus size={15} /> New project</button></div><div className="workspace-list">{workspaces.map((workspace) => <span className="workspace-chip" key={workspace.id}>{workspace.name}<small>{workspace.key}</small></span>)}</div><CreateWorkspaceForm onCreate={onCreateWorkspace} /><div className="projects-grid">{projects.map((project) => <button className={`surface project-card${project.id === currentProject.id ? ' active' : ''}`} key={project.id} onClick={() => onSelect(project.id)}><span className="project-avatar">{project.key.slice(0, 2)}</span><span className="project-card-main"><b>{project.name}</b><small>{project.key} · {project.status ?? 'Active'} · created {dateLabel(project.createdAt)}</small><span>{project.description || 'No project description'}</span></span>{project.id === currentProject.id && <span className="phase-pill">Current</span>}</button>)}</div><div className="project-lifecycle-list">{projects.map((project) => <article className="project-lifecycle-row" key={`actions-${project.id}`}><b>{project.name}</b><button className="text-button" onClick={() => { const name = window.prompt('Project name', project.name); if (name?.trim()) onUpdateProject(project.id, { name: name.trim() }); }}>Rename</button><button className="text-button" onClick={() => onDuplicateProject(project.id)}>Duplicate</button>{project.status === 'Archived' ? <button className="text-button" onClick={() => onRestoreProject(project.id)}>Restore</button> : <button className="text-button" onClick={() => { if (window.confirm(`Archive ${project.name}?`)) onArchiveProject(project.id); }}>Archive</button>}<button className="text-button danger-text" onClick={() => { if (window.confirm(`Delete ${project.name}?`)) onDeleteProject(project.id); }}>Delete</button></article>)}</div></div>;
 }
 
 function parseCsv(text: string): string[][] {
@@ -537,36 +667,41 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-function RequirementsPage({ requirements, updateRequirement, deleteRequirement, createRequirement }: { requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement']; deleteRequirement: WorkspaceProps['deleteRequirement']; createRequirement: WorkspaceProps['createRequirement'] }) {
+function RequirementsPage({ projectId, requirements, updateRequirement, deleteRequirement, createRequirement, bulkUpdate, bulkDelete }: { projectId: string; requirements: Requirement[]; updateRequirement: WorkspaceProps['updateRequirement']; deleteRequirement: WorkspaceProps['deleteRequirement']; createRequirement: WorkspaceProps['createRequirement']; bulkUpdate: WorkspaceProps['bulkUpdateRequirements']; bulkDelete: WorkspaceProps['bulkDeleteRequirements'] }) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<'All' | RequirementStatus>('All');
   const [priority, setPriority] = useState<'All' | Priority>('All');
+  const [typeFilter, setTypeFilter] = useState<'All' | RequirementType>('All');
   const [sort, setSort] = useState<'newest' | 'oldest' | 'priority'>('newest');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkPriority, setBulkPriority] = useState<Priority>('Medium');
+  const [bulkField, setBulkField] = useState<'priority' | 'status' | 'ownerUserId' | 'tags'>('priority');
+  const [bulkValue, setBulkValue] = useState('Medium');
+  const columnNames = ['status', 'description', 'type', 'priority', 'source', 'tags', 'owner'] as const;
+  const [columns, setColumns] = useState<string[]>(() => readStorage('reqtrace.requirement.columns.v1', [...columnNames]));
   const [importSummary, setImportSummary] = useState('');
   const visible = useMemo(() => {
     const priorityOrder: Record<Priority, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
     return requirements
       .filter((item) => (filter === 'All' || item.status === filter)
         && (priority === 'All' || item.priority === priority)
-        && `${item.code} ${item.title} ${item.statement}`.toLowerCase().includes(query.toLowerCase()))
+        && (typeFilter === 'All' || item.type === typeFilter)
+        && `${item.code} ${item.title} ${item.description ?? ''} ${item.statement} ${(item.tags ?? []).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => sort === 'oldest'
         ? a.createdAt.localeCompare(b.createdAt)
         : sort === 'priority'
           ? priorityOrder[a.priority] - priorityOrder[b.priority]
           : b.createdAt.localeCompare(a.createdAt));
-  }, [requirements, filter, priority, query, sort]);
+  }, [requirements, filter, priority, typeFilter, query, sort]);
   const pageSize = 20;
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const pageRecords = visible.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const selected = requirements.find((item) => item.id === selectedId);
   const exportCsv = () => {
-    const columns: (keyof Requirement)[] = ['code', 'title', 'statement', 'type', 'priority', 'status', 'actor', 'preconditions', 'sourceType', 'sourceReference', 'createdAt'];
+    const columns: (keyof Requirement)[] = ['code', 'title', 'description', 'statement', 'type', 'priority', 'status', 'ownerUserId', 'verificationMethod', 'tags', 'actor', 'preconditions', 'acceptanceCriteria', 'sourceType', 'sourceReference', 'originalText', 'createdAt', 'updatedAt'];
     const escapeCsv = (value: unknown) => { const raw = String(value ?? ''); const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw; return `"${safe.replaceAll('"', '""')}"`; };
     const content = `\uFEFF${[columns.map(escapeCsv).join(','), ...visible.map((record) => columns.map((column) => escapeCsv(record[column])).join(','))].join('\r\n')}`;
     const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
@@ -595,7 +730,9 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement, 
         const rawPriority = value('priority', 'Medium');
         const matchedPriority = PRIORITIES.find((item) => item.toLowerCase() === rawPriority.toLowerCase());
         if (!title || !statement || !matchedType || !matchedPriority) { skipped.push(rowIndex + 1); continue; }
-        createRequirement({ title, statement, type: matchedType, priority: matchedPriority,
+        createRequirement({ title, description: value('description'), statement, type: matchedType, priority: matchedPriority,
+          verificationMethod: value('verificationmethod', 'Test') as Requirement['verificationMethod'], ownerUserId: value('owneruserid') || null,
+          tags: value('tags').split(/[|,;]/).map((tag) => tag.trim()).filter(Boolean),
           actor: value('actor'), preconditions: value('preconditions'),
           acceptanceCriteria: value('acceptancecriteria').split(/[|;]/).map((item) => item.trim()).filter(Boolean),
           sourceType: 'Document', sourceReference: `${file.name} · row ${rowIndex + 1}`,
@@ -605,40 +742,56 @@ function RequirementsPage({ requirements, updateRequirement, deleteRequirement, 
       setImportSummary(`Imported ${imported} requirement${imported === 1 ? '' : 's'}${skipped.length ? `; skipped invalid row${skipped.length === 1 ? '' : 's'}: ${skipped.join(', ')}` : ''}.`);
     } catch { setImportSummary('Could not read this CSV. Save it as UTF-8 CSV and try again.'); }
   };
-  const applyBulkPriority = () => {
-    const editable = requirements.filter((item) => selectedIds.has(item.id) && item.status !== 'Approved' && item.status !== 'Rejected');
-    if (!editable.length || !window.confirm(`Set priority to ${bulkPriority} for ${editable.length} editable requirement${editable.length === 1 ? '' : 's'}?`)) return;
-    editable.forEach((item) => updateRequirement(item.id, { priority: bulkPriority }));
-    setImportSummary(`Updated priority for ${editable.length} requirement${editable.length === 1 ? '' : 's'}.`);
+  const applyBulk = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || !window.confirm(`Apply ${bulkField} to ${ids.length} selected requirement${ids.length === 1 ? '' : 's'}?`)) return;
+    const updates = bulkField === 'priority' ? { priority: bulkValue as Priority }
+      : bulkField === 'status' ? { status: bulkValue as RequirementStatus }
+        : bulkField === 'ownerUserId' ? { ownerUserId: bulkValue.trim() || null }
+          : { tags: bulkValue.split(',').map((tag) => tag.trim()).filter(Boolean) };
+    try { await bulkUpdate(ids, updates); setImportSummary(`Updated ${ids.length} selected requirement${ids.length === 1 ? '' : 's'}.`); }
+    catch (error) { setImportSummary(error instanceof Error ? error.message : 'Bulk update failed.'); }
+    setSelectedIds(new Set());
+  };
+  const removeBulk = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || !window.confirm(`Delete ${ids.length} selected requirement${ids.length === 1 ? '' : 's'}? Audit history will be retained.`)) return;
+    try { await bulkDelete(ids); setImportSummary(`Deleted ${ids.length} selected requirement${ids.length === 1 ? '' : 's'}.`); }
+    catch (error) { setImportSummary(error instanceof Error ? error.message : 'Bulk delete failed.'); }
     setSelectedIds(new Set());
   };
   return <>
     <div className="welcome-row"><div><div className="eyebrow">PROJECT RECORDS</div><h1 className="page-heading">Requirements</h1><p className="page-subheading">Review source-backed drafts before they enter the approved baseline.</p></div><div className="requirements-actions"><label className="button button-secondary"><Upload size={15} />Import CSV<input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importCsv(file); event.currentTarget.value = ''; }} /></label><button className="button button-primary" onClick={() => navigate('/intake')}><Plus size={16} /> Add requirement</button></div></div>
     {importSummary && <div className="sync-alert" role="status">{importSummary}</div>}
     <section className="surface records-surface">
-      <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'Rejected'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => { setFilter(status); setPage(1); }}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search records" /></label><select aria-label="Filter by priority" value={priority} onChange={(event) => { setPriority(event.target.value as 'All' | Priority); setPage(1); }}><option value="All">All priorities</option>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort requirements" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Priority</option></select><button className="button button-secondary button-small" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div></div>
-      {selectedIds.size > 0 && <div className="bulk-toolbar"><span>{selectedIds.size} selected · approved/rejected records are read-only</span><select aria-label="Set selected requirement priority" value={bulkPriority} onChange={(e) => setBulkPriority(e.target.value as Priority)}>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><button className="button button-secondary button-small" onClick={applyBulkPriority}>Update priority</button><button className="text-button" onClick={() => setSelectedIds(new Set())}>Clear</button></div>}
-      {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} selectedIds={selectedIds} onToggleSelection={(id, checked) => setSelectedIds((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; })} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
+      <div className="records-toolbar"><div className="filter-tabs">{(['All', 'Draft', 'Under review', 'Approved', 'In progress', 'Implemented', 'Verified', 'Rejected', 'Archived'] as const).map((status) => <button key={status} className={filter === status ? 'filter-tab active' : 'filter-tab'} onClick={() => { setFilter(status); setPage(1); }}>{status}<span>{status === 'All' ? requirements.length : requirements.filter((item) => item.status === status).length}</span></button>)}</div><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search requirements" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="Search records" /></label><select aria-label="Filter by priority" value={priority} onChange={(event) => { setPriority(event.target.value as 'All' | Priority); setPage(1); }}><option value="All">All priorities</option>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by category" value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value as 'All' | RequirementType); setPage(1); }}><option value="All">All categories</option>{TYPES.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort requirements" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Priority</option></select><details className="column-picker"><summary>Columns</summary>{columnNames.map((column) => <label key={column}><input type="checkbox" checked={columns.includes(column)} onChange={(event) => setColumns((current) => { const next = event.target.checked ? [...current, column] : current.filter((name) => name !== column); localStorage.setItem('reqtrace.requirement.columns.v1', JSON.stringify(next)); return next; })} />{column}</label>)}</details><button className="button button-secondary button-small" onClick={exportCsv} disabled={!visible.length}>Export CSV</button></div></div>
+      {selectedIds.size > 0 && <div className="bulk-toolbar"><span>{selectedIds.size} selected</span><select aria-label="Choose bulk field" value={bulkField} onChange={(e) => { const field = e.target.value as typeof bulkField; setBulkField(field); setBulkValue(field === 'priority' ? 'Medium' : field === 'status' ? 'Draft' : ''); }}><option value="priority">Priority</option><option value="status">Status</option><option value="ownerUserId">Owner user ID</option><option value="tags">Tags</option></select>{bulkField === 'priority' ? <select aria-label="Set selected priority" value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select> : bulkField === 'status' ? <select aria-label="Set selected status" value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>{(['Draft', 'Under review', 'Approved', 'In progress', 'Implemented', 'Verified', 'Rejected', 'Archived'] as RequirementStatus[]).map((item) => <option key={item}>{item}</option>)}</select> : <input aria-label={`Set selected ${bulkField}`} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder={bulkField === 'tags' ? 'Comma-separated tags' : 'User ID, blank to unassign'} />}<button className="button button-secondary button-small" onClick={() => void applyBulk()}>Apply to selected</button><button className="button button-secondary button-small" onClick={() => void removeBulk()}>Delete selected</button><button className="text-button" onClick={() => setSelectedIds(new Set())}>Clear</button></div>}
+      {visible.length ? <><RequirementRows requirements={pageRecords} onSelect={setSelectedId} selectedIds={selectedIds} columns={columns} onQuickUpdate={updateRequirement} onToggleSelection={(id, checked) => setSelectedIds((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; })} /><div className="pagination"><span>{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, visible.length)} of {visible.length}</span><div><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>Previous</button><button className="button button-secondary button-small" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>Next</button></div></div></> : <EmptyState icon={<Search size={18} />} title={requirements.length ? 'No matching requirements' : 'Your project is ready for its first requirement'} text={requirements.length ? 'Try another search, status, or priority filter.' : 'Capture a stakeholder request, document-backed statement, or manual entry.'} action={requirements.length ? undefined : 'Open intake'} onAction={requirements.length ? undefined : () => navigate('/intake')} />}
     </section>
     {selected && <RequirementEditor requirement={selected} onClose={() => setSelectedId(null)} onSave={(updates) => updateRequirement(selected.id, updates)} onDelete={() => { deleteRequirement(selected.id); setSelectedId(null); }} />}
   </>;
 }
 
-function RequirementRows({ requirements, onSelect, compact = false, selectedIds, onToggleSelection }: { requirements: Requirement[]; onSelect?: (id: string) => void; compact?: boolean; selectedIds?: Set<string>; onToggleSelection?: (id: string, checked: boolean) => void }) {
+function RequirementRows({ requirements, onSelect, compact = false, selectedIds, onToggleSelection, columns = [], onQuickUpdate }: { requirements: Requirement[]; onSelect?: (id: string) => void; compact?: boolean; selectedIds?: Set<string>; onToggleSelection?: (id: string, checked: boolean) => void; columns?: string[]; onQuickUpdate?: WorkspaceProps['updateRequirement'] }) {
   return <div className="requirement-list">{requirements.map((item) => {
-    const row = <button className={`requirement-row${compact ? ' compact' : ''}`} key={item.id} onClick={() => onSelect?.(item.id)} disabled={!onSelect}>
-      <div className="requirement-row-main"><span className="requirement-id">{item.code}</span><b>{item.title}</b><span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span></div>
-      <p>{item.statement}</p><div className="requirement-meta"><span className="source-chip">{item.sourceType}</span><span>{item.sourceReference}</span><span className="meta-separator">·</span><span>{dateLabel(item.createdAt)}</span><span className="spacer" /><span className="type-label">{item.type}</span><span className={`priority-label priority-${item.priority.toLowerCase()}`}>{item.priority}</span>{onSelect && <ArrowUpRight size={15} />}</div>
-    </button>;
-    return onToggleSelection ? <div className="requirement-select-row" key={item.id}><input type="checkbox" aria-label={`Select ${item.code}`} checked={selectedIds?.has(item.id) ?? false} disabled={item.status === 'Approved' || item.status === 'Rejected'} onChange={(event) => onToggleSelection(item.id, event.target.checked)} />{row}</div> : row;
+    const row = <div className="requirement-row-wrap" key={item.id}><button className={`requirement-row${compact ? ' compact' : ''}`} onClick={() => onSelect?.(item.id)} disabled={!onSelect}>
+      <div className="requirement-row-main"><span className="requirement-id">{item.code}</span><b>{item.title}</b>{columns.includes('status') && <span className={`status-pill status-${item.status.toLowerCase().replace(' ', '-')}`}>{item.status}</span>}</div>
+      {columns.includes('description') && item.description && <p>{item.description}</p>}<p>{item.statement}</p><div className="requirement-meta">{columns.includes('source') && <><span className="source-chip">{item.sourceType}</span><span>{item.sourceReference}</span></>}<span className="meta-separator">·</span><span>{dateLabel(item.createdAt)}</span><span className="spacer" />{columns.includes('type') && <span className="type-label">{item.type}</span>}{columns.includes('priority') && <span className={`priority-label priority-${item.priority.toLowerCase()}`}>{item.priority}</span>}{columns.includes('owner') && item.ownerUserId && <span className="type-label">Owner {item.ownerUserId}</span>}{columns.includes('tags') && (item.tags ?? []).map((tag) => <span className="source-chip" key={tag}>{tag}</span>)}{onSelect && <ArrowUpRight size={15} />}</div>
+    </button>{onQuickUpdate && !compact && <div className="inline-edit-controls"><select aria-label={`Inline priority ${item.code}`} value={item.priority} onChange={(event) => onQuickUpdate(item.id, { priority: event.target.value as Priority })}>{PRIORITIES.map((priority) => <option key={priority}>{priority}</option>)}</select><select aria-label={`Inline status ${item.code}`} value={item.status} onChange={(event) => onQuickUpdate(item.id, { status: event.target.value as RequirementStatus })}>{(['Draft', 'Under review', 'Approved', 'In progress', 'Implemented', 'Verified', 'Rejected', 'Archived'] as RequirementStatus[]).map((status) => <option key={status}>{status}</option>)}</select></div>}</div>;
+    return onToggleSelection ? <div className="requirement-select-row" key={item.id}><input type="checkbox" aria-label={`Select ${item.code}`} checked={selectedIds?.has(item.id) ?? false} onChange={(event) => onToggleSelection(item.id, event.target.checked)} />{row}</div> : row;
   })}</div>;
 }
 
 function RequirementEditor({ requirement, onClose, onSave, onDelete }: { requirement: Requirement; onClose: () => void; onSave: (updates: Partial<Requirement>) => void; onDelete: () => void }) {
   const [title, setTitle] = useState(requirement.title);
+  const [description, setDescription] = useState(requirement.description ?? '');
   const [statement, setStatement] = useState(requirement.statement);
   const [type, setType] = useState(requirement.type);
   const [priority, setPriority] = useState(requirement.priority);
+  const [status, setStatus] = useState(requirement.status);
+  const [ownerUserId, setOwnerUserId] = useState(requirement.ownerUserId ?? '');
+  const [verificationMethod, setVerificationMethod] = useState<NonNullable<Requirement['verificationMethod']>>(requirement.verificationMethod ?? 'Test');
+  const [tags, setTags] = useState((requirement.tags ?? []).join(', '));
   const [actor, setActor] = useState(requirement.actor);
   const [preconditions, setPreconditions] = useState(requirement.preconditions);
   const [criteria, setCriteria] = useState(requirement.acceptanceCriteria.join('\n'));
@@ -647,12 +800,16 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
   const [comments, setComments] = useState<RequirementCommentRecord[]>([]);
   const [commentText, setCommentText] = useState('');
   const [historyError, setHistoryError] = useState('');
+  const [sourceDocument, setSourceDocument] = useState<SourceDocumentRecord | null>(null);
+  const [relatedRecords, setRelatedRecords] = useState<{ trace: TraceabilitySnapshot; audit: AuditRecord[] } | null>(null);
   const [commentBusy, setCommentBusy] = useState(false);
   const refreshHistory = async () => { try { const [versionRows, commentRows] = await Promise.all([getRequirementVersions(requirement.id), getRequirementComments(requirement.id)]); setVersions(versionRows); setComments(commentRows); setHistoryError(''); } catch { setHistoryError('Version history and comments are unavailable while the local API is offline.'); } };
   useEffect(() => { void refreshHistory(); }, [requirement.id, requirement.updatedAt]);
+  useEffect(() => { if (requirement.sourceDocumentId) void getProjectDocuments(requirement.projectId).then((rows) => setSourceDocument(rows.find((item) => item.id === requirement.sourceDocumentId) ?? null)).catch(() => setSourceDocument(null)); }, [requirement.projectId, requirement.sourceDocumentId]);
+  useEffect(() => { void Promise.all([getTraceability(requirement.projectId), getProjectAudit(requirement.projectId)]).then(([trace, audit]) => setRelatedRecords({ trace, audit })).catch(() => setRelatedRecords(null)); }, [requirement.projectId, requirement.id, requirement.updatedAt]);
   const addComment = async (event: FormEvent) => { event.preventDefault(); if (!commentText.trim()) return; setCommentBusy(true); try { await createRequirementComment(requirement.id, commentText); setCommentText(''); await refreshHistory(); } catch (e) { setHistoryError(e instanceof Error ? e.message : 'Could not save comment.'); } finally { setCommentBusy(false); } };
-  const locked = requirement.status === 'Approved' || requirement.status === 'Rejected';
-  const editedFields = () => ({ title: title.trim(), statement: statement.trim(), type, priority, actor: actor.trim(), preconditions: preconditions.trim(), acceptanceCriteria: criteria.split('\n').map((value) => value.trim()).filter(Boolean) });
+  const locked = false;
+  const editedFields = () => ({ title: title.trim(), description: description.trim(), statement: statement.trim(), type, priority, status, ownerUserId: ownerUserId.trim() || null, verificationMethod, tags: tags.split(',').map((value) => value.trim()).filter(Boolean), actor: actor.trim(), preconditions: preconditions.trim(), acceptanceCriteria: criteria.split('\n').map((value) => value.trim()).filter(Boolean) });
   const save = () => { if (!title.trim() || !statement.trim()) return; onSave(editedFields()); setSaved(true); };
   const submitForReview = () => { if (!title.trim() || !statement.trim() || !window.confirm('Submit this draft for review?')) return; onSave({ ...editedFields(), status: 'Under review' }); onClose(); };
   const approve = () => { if (!title.trim() || !statement.trim() || !window.confirm('Approve this requirement into the project baseline?')) return; onSave({ ...editedFields(), status: 'Approved', reviewedAt: new Date().toISOString() }); onClose(); };
@@ -662,12 +819,17 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
     <div className="drawer-source"><span className="source-chip">{requirement.sourceType}</span><span>{requirement.sourceReference}</span><small>Captured {dateLabel(requirement.createdAt)}</small></div>
     <div className="drawer-content"><div className="info-note"><BookOpen size={15} /><span>Original source wording is retained below. {locked ? 'Approved and rejected records are read-only in this phase.' : 'Edit the draft to clarify it before submitting for approval.'}</span></div>
       <label>Title<input disabled={locked} value={title} onChange={(event) => { setTitle(event.target.value); setSaved(false); }} /></label>
+      <label>Description<textarea disabled={locked} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       <label>Requirement statement<textarea disabled={locked} rows={5} value={statement} onChange={(event) => { setStatement(event.target.value); setSaved(false); }} /></label>
       <div className="field-grid"><label>Type<select disabled={locked} value={type} onChange={(event) => setType(event.target.value as RequirementType)}>{TYPES.map((item) => <option key={item}>{item}</option>)}</select></label><label>Priority<select disabled={locked} value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>{PRIORITIES.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+      <div className="field-grid"><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as RequirementStatus)}>{(['Draft', 'Under review', 'Approved', 'In progress', 'Implemented', 'Verified', 'Rejected', 'Archived'] as RequirementStatus[]).map((item) => <option key={item}>{item}</option>)}</select></label><label>Verification method<select value={verificationMethod} onChange={(event) => setVerificationMethod(event.target.value as NonNullable<Requirement['verificationMethod']>)}>{(['Test', 'Inspection', 'Analysis', 'Demonstration'] as const).map((item) => <option key={item}>{item}</option>)}</select></label></div>
+      <div className="field-grid"><label>Owner user ID<input value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} placeholder="Optional workspace user ID" /></label><label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Comma-separated tags" /></label></div>
       <label>Actor<input disabled={locked} value={actor} onChange={(event) => setActor(event.target.value)} placeholder="Who needs this?" /></label>
       <label>Preconditions<textarea disabled={locked} rows={2} value={preconditions} onChange={(event) => setPreconditions(event.target.value)} /></label>
       <label>Acceptance criteria <span className="optional">One per line</span><textarea disabled={locked} rows={4} value={criteria} onChange={(event) => setCriteria(event.target.value)} /></label>
-      <div className="original-text"><b>Original wording</b><p>{requirement.originalText}</p></div>
+      <label>Original source wording<textarea readOnly rows={4} value={requirement.originalText} /></label>
+      {sourceDocument && <details className="source-document-detail"><summary>Source document: {sourceDocument.filename}</summary><pre>{sourceDocument.extractedText.slice(0, 12000)}</pre><small>Text extracted by {sourceDocument.extractionMethod}; captured {dateLabel(sourceDocument.createdAt)}.</small></details>}
+      <section className="drawer-record-history"><div className="section-heading"><div><span className="eyebrow">TRACE LINKS & VERIFICATION</span><h3>Related records</h3></div></div>{relatedRecords ? <><div className="related-record-group"><b>Requirement links</b>{relatedRecords.trace.links.filter((link) => link.sourceRequirementId === requirement.id || link.targetRequirementId === requirement.id).map((link) => <p key={link.id}>{link.relationshipType.replaceAll('_', ' ')} · {link.sourceRequirementId === requirement.id ? link.targetRequirementId : link.sourceRequirementId}</p>)}{!relatedRecords.trace.links.some((link) => link.sourceRequirementId === requirement.id || link.targetRequirementId === requirement.id) && <small>No related requirements linked.</small>}</div><div className="related-record-group"><b>Linked tests</b>{relatedRecords.trace.testCases.filter((test) => test.requirementId === requirement.id).map((test) => <p key={test.id}>{test.code} · {test.title} · {test.status}</p>)}{!relatedRecords.trace.testCases.some((test) => test.requirementId === requirement.id) && <small>No test cases linked.</small>}</div><div className="related-record-group"><b>Linked defects / evidence</b>{relatedRecords.trace.defects.filter((defect) => defect.requirementId === requirement.id).map((defect) => <p key={defect.id}>{defect.code} · {defect.title} · {defect.status}</p>)}{!relatedRecords.trace.defects.some((defect) => defect.requirementId === requirement.id) && <small>No defects linked.</small>}</div><div className="related-record-group"><b>Activity</b>{relatedRecords.audit.filter((event) => event.requirementId === requirement.id).slice(0, 8).map((event) => <p key={event.id}>{event.action.replaceAll('_', ' ')} · {dateLabel(event.createdAt)}</p>)}{!relatedRecords.audit.some((event) => event.requirementId === requirement.id) && <small>No activity has been recorded.</small>}</div></> : <small>Related project records are unavailable while the API is offline.</small>}</section>
       {saved && <div className="save-confirmation"><Check size={14} /> Draft changes saved.</div>}
       <section className="drawer-record-history"><div className="section-heading"><div><span className="eyebrow">VERSION HISTORY</span><h3>{versions.length} saved versions</h3></div></div>{versions.length ? versions.map((version) => <details className="requirement-version" key={version.id}><summary><b>Version {version.versionNumber}</b><span>{String(version.snapshot.status ?? '')}</span><small>{dateLabel(version.createdAt)}</small></summary><p>{String(version.snapshot.title ?? '')}</p><small>{String(version.snapshot.statement ?? '')}</small></details>) : <p className="history-empty">No versions are available yet.</p>}</section>
       <section className="drawer-comments"><div className="section-heading"><div><span className="eyebrow">DISCUSSION</span><h3>{comments.length} comments</h3></div></div>{comments.map((comment) => <article className="requirement-comment" key={comment.id}><div><b>{comment.author}</b><small>{dateLabel(comment.createdAt)}</small></div><p>{comment.content}</p></article>)}<form onSubmit={addComment}><textarea rows={2} maxLength={5000} value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Add a project comment…" /><button className="button button-secondary button-small" disabled={commentBusy || !commentText.trim()}>{commentBusy ? 'Saving…' : 'Add comment'}</button></form>{historyError && <small className="history-error">{historyError}</small>}</section>

@@ -34,6 +34,7 @@ def main() -> None:
         "--collect-submodules", "uvicorn", "--collect-submodules", "fastapi",
         "--collect-submodules", "sqlalchemy", "--collect-submodules", "pydantic_settings",
         "--collect-submodules", "alembic",
+        "--collect-submodules", "pypdf",
         "--add-data", f"{BACKEND_DIR / 'alembic.ini'}{os.pathsep}.",
         "--add-data", f"{BACKEND_DIR / 'alembic'}{os.pathsep}alembic",
         str(BACKEND_DIR / "sidecar.py"),

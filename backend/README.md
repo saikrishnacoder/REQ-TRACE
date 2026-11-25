@@ -105,21 +105,34 @@ attempts per five-minute in-process window; other authenticated API traffic is
 limited to 300 requests/minute per process. These in-memory limits do not
 coordinate across multiple workers or instances.
 
-Project membership is managed through `/api/v1/projects/{project_id}/members`.
-System Admins can assign or remove active users as project Editors or Viewers.
-Non-admin project lists are filtered to memberships, and the API checks
-membership for project-scoped routes and requirement/test/defect/conversation
-record routes. The desktop Project settings page exposes these membership
-actions to Admins; global account lifecycle remains API-only.
+Workspace membership is managed through `/api/v1/workspaces/{workspace_id}/members`.
+Workspace Owner/Admin roles manage active team members as Admins, Editors, or
+Viewers. Workspace membership grants access to projects in that workspace;
+legacy direct project memberships remain scoped to their individual project.
+Project lists and project/requirement/test/defect/conversation routes enforce
+those boundaries. Workspace Editors can create/update projects and requirements;
+Owner/Admin can approve/reject/verify requirements, archive projects, delete
+records, and manage team access. System Admins have global access. Project
+lifecycle endpoints are `PATCH /projects/{id}`, `POST /projects/{id}/archive`,
+`POST /projects/{id}/duplicate`, and `DELETE /projects/{id}`.
+
+Requirements support the ten categories, eight workflow states, description,
+owner, verification method, tags, and current version. Requirement changes,
+bulk changes/deletes, audit events, version snapshots, and sync outbox events
+commit in one database transaction. Bulk operations are exposed at
+`/projects/{project_id}/requirements/bulk` and `.../bulk-delete`.
 
 This remains an initial authentication foundation, not a complete shared-
 service security boundary. Organization tenancy, password reset, distributed
-rate limiting, CSRF controls, exhaustive route
-authorization testing, and deployment hardening remain incomplete. **Do not
+rate limiting, CSRF controls, and deployment hardening remain incomplete. **Do not
 bind the API to a public or
 shared network.** Keep `.env` out of source control and use a secret manager
 for any future deployment. The app has no file-upload endpoint; document
 intake records a reference and user-entered text only.
+
+Document extraction accepts bounded PDF, DOCX, TXT, MD, and CSV content and
+stores extracted text and provenance in the database. OCR for image-only PDFs
+is not implemented; the uploaded binary itself is not retained.
 
 The browser does not automatically upload its local cached projects or older
 queued writes when it connects to Oracle. Those records remain on the device;

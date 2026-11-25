@@ -23,7 +23,7 @@ def test_upgrade_creates_a_fresh_schema(tmp_path) -> None:
     upgrade_on(engine)
 
     tables = set(inspect(engine).get_table_names())
-    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "RT_USERS", "RT_PROJECT_MEMBERS", "alembic_version"} <= tables
+    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_SOURCE_DOCUMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "RT_USERS", "RT_PROJECT_MEMBERS", "alembic_version"} <= tables
     engine.dispose()
 
 
@@ -38,8 +38,9 @@ def test_upgrade_preserves_data_from_create_all_schema(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert connection.execute(text("SELECT NAME FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "Legacy"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261118_0012"
-        assert {"RT_USERS", "RT_PROJECT_MEMBERS"} <= set(inspect(engine).get_table_names())
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261124_0014"
+        assert {"RT_USERS", "RT_PROJECT_MEMBERS", "RT_WORKSPACES", "RT_WORKSPACE_MEMBERS", "RT_SOURCE_DOCUMENTS"} <= set(inspect(engine).get_table_names())
+        assert connection.execute(text("SELECT WORKSPACE_ID FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "default-workspace"
     engine.dispose()
 
 
@@ -57,5 +58,22 @@ def test_upgrade_adds_soft_delete_column_to_existing_schema(tmp_path) -> None:
     columns = {column["name"].casefold() for column in inspect(engine).get_columns("RT_REQUIREMENTS")}
     with engine.connect() as connection:
         assert "deleted_at" in columns
+        assert "source_document_id" in columns
         assert connection.execute(text("SELECT NAME FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "Legacy"
+    engine.dispose()
+
+
+def test_upgrade_adds_source_document_support_to_existing_schema(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{(tmp_path / 'pre-documents.db').as_posix()}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE RT_PROJECTS (PROJECT_ID VARCHAR(36) PRIMARY KEY)")
+        connection.exec_driver_sql("CREATE TABLE RT_REQUIREMENTS (REQUIREMENT_ID VARCHAR(36) PRIMARY KEY, PROJECT_ID VARCHAR(36) NOT NULL REFERENCES RT_PROJECTS(PROJECT_ID))")
+
+    upgrade_on(engine)
+
+    assert "RT_SOURCE_DOCUMENTS" in inspect(engine).get_table_names()
+    columns = {column["name"].casefold() for column in inspect(engine).get_columns("RT_REQUIREMENTS")}
+    assert "source_document_id" in columns
+    foreign_keys = inspect(engine).get_foreign_keys("RT_REQUIREMENTS")
+    assert any("RT_SOURCE_DOCUMENTS" == key["referred_table"] for key in foreign_keys)
     engine.dispose()

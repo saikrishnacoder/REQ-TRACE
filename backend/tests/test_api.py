@@ -1,4 +1,7 @@
 from collections.abc import Generator
+import base64
+import io
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -93,6 +96,63 @@ def test_project_and_requirement_review_flow_is_persisted(client: TestClient) ->
     comment = client.post(f"/api/v1/requirements/{requirement['id']}/comments", json={"content": "Verify timeout behavior."})
     assert comment.status_code == 201
     assert client.get(f"/api/v1/requirements/{requirement['id']}/comments").json()[0]["content"] == "Verify timeout behavior."
+
+
+def test_project_lifecycle_and_extended_requirement_bulk_workflow(client: TestClient) -> None:
+    project = client.post("/api/v1/projects", json={
+        "name": "Lifecycle", "key": "LIFE", "category": "Platform", "priority": "Critical",
+        "objectives": "Ship a resilient service", "status": "Active",
+    }).json()
+    assert project["workspaceId"] == "default-workspace"
+    assert project["category"] == "Platform"
+    seed = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Reusable requirement", "description": "Copy with project", "statement": "The system shall retain the baseline.",
+        "type": "Business", "priority": "High", "tags": ["baseline"], "sourceType": "Manual",
+        "sourceReference": "Project brief", "originalText": "Retain the baseline.",
+    })
+    assert seed.status_code == 201
+    assert client.patch(f"/api/v1/projects/{project['id']}", json={"description": "Updated", "status": "On hold"}).json()["status"] == "On hold"
+    archived = client.post(f"/api/v1/projects/{project['id']}/archive")
+    assert archived.status_code == 200 and archived.json()["status"] == "Archived"
+    duplicated = client.post(f"/api/v1/projects/{project['id']}/duplicate")
+    assert duplicated.status_code == 201
+    assert duplicated.json()["status"] == "Active"
+    assert duplicated.json()["key"] != project["key"]
+    copied_requirements = client.get(f"/api/v1/projects/{duplicated.json()['id']}/requirements").json()
+    assert len(copied_requirements) == 1
+    assert copied_requirements[0]["status"] == "Draft"
+    assert copied_requirements[0]["title"] == "Reusable requirement"
+    assert len(client.get(f"/api/v1/requirements/{copied_requirements[0]['id']}/versions").json()) == 1
+
+    requirements = []
+    for title in ("Data encryption", "Audit retention"):
+        response = client.post(f"/api/v1/projects/{duplicated.json()['id']}/requirements", json={
+            "title": title, "description": "Protection requirements", "statement": f"The system shall {title.lower()}.",
+            "type": "Regulatory", "priority": "High", "verificationMethod": "Inspection",
+            "tags": ["privacy", "release"], "sourceType": "Manual", "sourceReference": "Policy",
+            "originalText": title,
+        })
+        assert response.status_code == 201, response.text
+        requirements.append(response.json())
+    assert requirements[0]["description"] == "Protection requirements"
+    assert requirements[0]["verificationMethod"] == "Inspection"
+    assert requirements[0]["currentVersion"] == 1
+    ids = [item["id"] for item in requirements]
+    assert client.patch(f"/api/v1/projects/{duplicated.json()['id']}/requirements/bulk", json={
+        "requirementIds": ids, "priority": "Critical", "tags": ["security", "release"],
+    }).status_code == 200
+    for requirement_id in ids:
+        saved = client.get(f"/api/v1/projects/{duplicated.json()['id']}/requirements").json()
+        record = next(item for item in saved if item["id"] == requirement_id)
+        assert record["priority"] == "Critical" and record["tags"] == ["security", "release"]
+        assert record["currentVersion"] == 2
+        assert len(client.get(f"/api/v1/requirements/{requirement_id}/versions").json()) == 2
+    assert client.post(f"/api/v1/projects/{duplicated.json()['id']}/requirements/bulk-delete", json={"requirementIds": ids}).status_code == 204
+    assert len(client.get(f"/api/v1/projects/{duplicated.json()['id']}/requirements").json()) == 1
+    audit = client.get(f"/api/v1/projects/{duplicated.json()['id']}/audit").json()
+    assert sum(event["action"] == "requirement_deleted" for event in audit) == 2
+    assert client.delete(f"/api/v1/projects/{project['id']}").status_code == 204
+    assert client.get("/api/v1/projects").json() == [duplicated.json()]
 
 
 def test_cors_allows_local_frontend_and_rejects_unconfigured_origin(client: TestClient) -> None:
@@ -310,6 +370,96 @@ def test_requirement_analysis_uses_labeled_local_fallback_and_persists_history(c
     history = client.get(f"/api/v1/requirements/{requirement['id']}/analyses")
     assert history.status_code == 200
     assert len(history.json()) == 1
+
+
+def test_document_extraction_persists_source_and_links_requirements(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ai_api_key", "")
+    project = client.post("/api/v1/projects", json={"name": "Document intake", "key": "DOC"}).json()
+    foreign_project = client.post("/api/v1/projects", json={"name": "Other", "key": "OTH"}).json()
+    contents = b"The system shall retain each approved requirement for seven years.\nUsers must be able to export the audit history."
+    extracted = client.post(f"/api/v1/projects/{project['id']}/documents/extract", json={
+        "filename": "requirements.txt", "mediaType": "text/plain",
+        "contentBase64": base64.b64encode(contents).decode("ascii"),
+    })
+    assert extracted.status_code == 201
+    source = extracted.json()
+    assert source["extractionMethod"] == "utf-8-text"
+    assert len(source["candidateStatements"]) == 2
+    assert source["extractedText"] == contents.decode()
+
+    listed = client.get(f"/api/v1/projects/{project['id']}/documents")
+    assert [item["id"] for item in listed.json()] == [source["id"]]
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "sourceDocumentId": source["id"], "title": "Retention", "statement": source["candidateStatements"][0],
+        "type": "Functional", "priority": "High", "sourceType": "Document",
+        "sourceReference": "requirements.txt · section 1", "originalText": source["candidateStatements"][0],
+    })
+    assert requirement.status_code == 201
+    assert requirement.json()["sourceDocumentId"] == source["id"]
+
+    requirement_id = requirement.json()["id"]
+    for decision in ("Under review", "Approved"):
+        response = client.patch(f"/api/v1/requirements/{requirement_id}", json={"status": decision})
+        assert response.status_code == 200
+    history = client.get(f"/api/v1/requirements/{requirement_id}/versions").json()
+    assert [item["snapshot"]["status"] for item in history] == ["Approved", "Under review", "Draft"]
+    assert all(item["snapshot"]["sourceDocumentId"] == source["id"] for item in history)
+
+    analysis = client.post(f"/api/v1/requirements/{requirement_id}/analyses")
+    assert analysis.status_code == 201
+    assert analysis.json()["provider"] == "heuristic-fallback"
+    assert len(client.get(f"/api/v1/requirements/{requirement_id}/analyses").json()) == 1
+
+    cross_project = client.post(f"/api/v1/projects/{foreign_project['id']}/requirements", json={
+        "sourceDocumentId": source["id"], "title": "Wrong scope", "statement": "A source cannot cross project boundaries.",
+        "type": "Functional", "priority": "Medium", "sourceType": "Document",
+        "sourceReference": "requirements.txt", "originalText": "Cross-project source reference",
+    })
+    assert cross_project.status_code == 422
+
+
+def test_docx_extraction_rejects_invalid_document(client: TestClient) -> None:
+    project = client.post("/api/v1/projects", json={"name": "DOCX", "key": "DOCX"}).json()
+    document = io.BytesIO()
+    with zipfile.ZipFile(document, "w") as archive:
+        archive.writestr("word/document.xml", """<?xml version='1.0' encoding='UTF-8'?>
+            <w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body>
+            <w:p><w:r><w:t>The system shall validate every submitted transaction.</w:t></w:r></w:p>
+            </w:body></w:document>""")
+    valid = client.post(f"/api/v1/projects/{project['id']}/documents/extract", json={
+        "filename": "requirements.docx", "contentBase64": base64.b64encode(document.getvalue()).decode("ascii"),
+    })
+    assert valid.status_code == 201
+    assert valid.json()["extractionMethod"] == "docx-xml"
+    assert valid.json()["candidateStatements"] == ["The system shall validate every submitted transaction."]
+
+    invalid = client.post(f"/api/v1/projects/{project['id']}/documents/extract", json={
+        "filename": "broken.docx", "contentBase64": base64.b64encode(b"not a zip").decode("ascii"),
+    })
+    assert invalid.status_code == 422
+
+
+def test_pdf_extraction_returns_persistable_candidate_text(client: TestClient) -> None:
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    project = client.post("/api/v1/projects", json={"name": "PDF intake", "key": "PDF"}).json()
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")})
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+    stream = DecodedStreamObject()
+    stream.set_data(b"BT /F1 12 Tf 72 720 Td (The system shall retain each approved requirement for seven years.) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    pdf = io.BytesIO()
+    writer.write(pdf)
+    response = client.post(f"/api/v1/projects/{project['id']}/documents/extract", json={
+        "filename": "requirements.pdf", "mediaType": "application/pdf",
+        "contentBase64": base64.b64encode(pdf.getvalue()).decode("ascii"),
+    })
+    assert response.status_code == 201
+    assert response.json()["extractionMethod"] == "pypdf"
+    assert response.json()["candidateStatements"] == ["The system shall retain each approved requirement for seven years."]
 
 
 def test_assistant_returns_grounded_records_and_persists_conversation(client: TestClient, monkeypatch) -> None:
@@ -564,3 +714,67 @@ def test_desktop_local_token_guards_health_and_shutdown(client: TestClient, monk
     assert shutdown.status_code == 202
     assert shutdown.json() == {"status": "shutting_down"}
     assert calls == ["shutdown"]
+
+
+def test_workspace_membership_isolation_and_role_permissions(client: TestClient, monkeypatch) -> None:
+    from app.auth import issue_token
+
+    monkeypatch.setattr(settings, "auth_required", True)
+    monkeypatch.setattr(settings, "auth_token_secret", "workspace-test-secret-long-enough-for-hmac")
+    session_generator = app.dependency_overrides[get_db]()
+    db = next(session_generator)
+    db.add_all([
+        models.UserAccount(id="workspace-owner", email="owner@workspace.test", password_hash=hash_password("owner-password-123"), role="Editor", active=True),
+        models.UserAccount(id="workspace-viewer", email="viewer@workspace.test", password_hash=hash_password("viewer-password-123"), role="Editor", active=True),
+        models.UserAccount(id="workspace-editor", email="editor@workspace.test", password_hash=hash_password("editor-password-123"), role="Editor", active=True),
+    ])
+    db.commit(); db.close(); session_generator.close()
+    owner = {"Authorization": f"Bearer {issue_token('workspace-owner', 'owner@workspace.test', 'Editor', settings.auth_token_secret, 5)}"}
+    viewer = {"Authorization": f"Bearer {issue_token('workspace-viewer', 'viewer@workspace.test', 'Editor', settings.auth_token_secret, 5)}"}
+    editor = {"Authorization": f"Bearer {issue_token('workspace-editor', 'editor@workspace.test', 'Editor', settings.auth_token_secret, 5)}"}
+    workspace = client.post("/api/v1/workspaces", json={"name": "Product", "key": "PRODUCT"}, headers=owner)
+    assert workspace.status_code == 201
+    project = client.post("/api/v1/projects", json={"name": "Portal", "key": "PORTAL", "workspaceId": workspace.json()["id"]}, headers=owner)
+    assert project.status_code == 201
+    assert client.post(f"/api/v1/workspaces/{workspace.json()['id']}/members", json={"userId": "workspace-editor", "role": "Editor"}, headers=owner).status_code == 201
+    assert client.get("/api/v1/projects", headers=viewer).json() == []
+    assert client.get(f"/api/v1/projects/{project.json()['id']}", headers=viewer).status_code == 403
+    assert client.post(f"/api/v1/workspaces/{workspace.json()['id']}/members", json={"userId": "workspace-viewer", "role": "Viewer"}, headers=owner).status_code == 201
+    assert len(client.get("/api/v1/projects", headers=viewer).json()) == 1
+    assert client.patch(f"/api/v1/projects/{project.json()['id']}", json={"description": "No write access"}, headers=viewer).status_code == 403
+    requirement = client.post(f"/api/v1/projects/{project.json()['id']}/requirements", json={
+        "title": "Review gate", "statement": "The system shall require review.", "type": "Business",
+        "priority": "Medium", "sourceType": "Manual", "sourceReference": "Policy", "originalText": "Review gate",
+    }, headers=owner).json()
+    assert client.patch(f"/api/v1/requirements/{requirement['id']}", json={"status": "Under review"}, headers=viewer).status_code == 403
+    assert client.patch(f"/api/v1/requirements/{requirement['id']}", json={"status": "Under review"}, headers=owner).status_code == 200
+    assert client.patch(f"/api/v1/requirements/{requirement['id']}", json={"status": "Approved"}, headers=viewer).status_code == 403
+    assert client.patch(f"/api/v1/requirements/{requirement['id']}", json={"status": "Approved"}, headers=owner).status_code == 200
+    assert client.post(f"/api/v1/projects/{project.json()['id']}/requirements/bulk-delete", json={"requirementIds": [requirement["id"]]}, headers=editor).status_code == 403
+    assert client.post(f"/api/v1/projects/{project.json()['id']}/archive", headers=viewer).status_code == 403
+    assert client.post(f"/api/v1/projects/{project.json()['id']}/archive", headers=owner).status_code == 200
+    assert client.post(f"/api/v1/projects/{project.json()['id']}/restore", headers=owner).status_code == 200
+    assert client.delete(f"/api/v1/projects/{project.json()['id']}", headers=owner).status_code == 204
+
+
+def test_bulk_update_failure_rolls_back_requirement_audit_and_versions(client: TestClient) -> None:
+    project = client.post("/api/v1/projects", json={"name": "Atomic", "key": "ATOMIC"}).json()
+    requirement_ids = []
+    for title in ("Reviewable", "Draft only"):
+        requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+            "title": title, "statement": f"The system shall handle {title.lower()}.", "type": "Functional",
+            "priority": "Medium", "sourceType": "Manual", "sourceReference": "Test", "originalText": title,
+        }).json()
+        requirement_ids.append(requirement["id"])
+    assert client.patch(f"/api/v1/requirements/{requirement_ids[0]}", json={"status": "Under review"}).status_code == 200
+    failed = client.patch(f"/api/v1/projects/{project['id']}/requirements/bulk", json={
+        "requirementIds": requirement_ids, "status": "Approved",
+    })
+    assert failed.status_code == 409
+    records = client.get(f"/api/v1/projects/{project['id']}/requirements").json()
+    states = {item["id"]: item["status"] for item in records}
+    assert states == {requirement_ids[0]: "Under review", requirement_ids[1]: "Draft"}
+    versions = [client.get(f"/api/v1/requirements/{item_id}/versions").json() for item_id in requirement_ids]
+    assert [len(rows) for rows in versions] == [2, 1]
+    audit = client.get(f"/api/v1/projects/{project['id']}/audit").json()
+    assert sum(item["action"] == "requirement_approved" for item in audit) == 0

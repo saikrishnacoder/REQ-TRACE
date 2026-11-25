@@ -5,9 +5,11 @@ workspace. The Windows desktop app uses React + TypeScript in Tauri 2 and a
 Python + FastAPI sidecar. The local API persists to SQLite; PostgreSQL and
 Oracle adapters are available through the same SQLAlchemy/Alembic backend.
 
-Current routes cover projects, requirements and review, test cases and manual
-runs, defects, AI analysis, grounded project Q&A, read-only GitHub imports,
-traceability and its knowledge graph, reports, and manual quality automation. See
+Current routes cover workspace/team boundaries, project lifecycle, requirement
+authoring/review/version history, source document extraction, test cases and
+manual runs, defects, AI analysis, grounded project Q&A, read-only GitHub
+imports, traceability and its knowledge graph, reports, and manual quality
+automation. See
 [the audit and status report](AUDIT_REPORT.md) for tested scope and remaining
 work, and [the implementation plan](IMPLEMENTATION_PLAN.md) for architecture.
 
@@ -49,10 +51,12 @@ The local API defaults to loopback. Tauri desktop sessions generate a random
 shutdown; it stays in process memory and is never sent to non-loopback URLs.
 PostgreSQL and Oracle modes require signed bearer tokens and apply basic
 Admin/Editor/Viewer write guards; manually started local development mode
-remains unauthenticated by default. Admins can create/deactivate accounts and assign
-Editor/Viewer project membership through the API. Project and record routes
-enforce membership, and non-admin project lists are filtered. Project-level
-membership management is available in Project settings. Global account
+remains unauthenticated by default. Workspace Owner/Admin/Editor/Viewer roles
+scope projects and their records. Workspace owners/admins manage team membership;
+workspace editors create and update projects and requirements; only workspace
+owners/admins approve/reject requirements, archive projects, and delete
+records. System admins retain global administration. Non-admin project lists
+are restricted to workspace or explicit project membership. Global account
 lifecycle UI, password reset, distributed rate limiting, and organization
 tenancy remain incomplete. Existing API tokens now honor account deactivation
 and role changes immediately. For a separate frontend origin, configure

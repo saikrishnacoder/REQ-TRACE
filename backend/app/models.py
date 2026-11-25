@@ -27,13 +27,70 @@ class JSONText(TypeDecorator):
 
 class Project(Base):
     __tablename__ = "RT_PROJECTS"
-    __table_args__ = (UniqueConstraint("PROJECT_KEY", name="UQ_RT_PROJECTS_KEY"),)
+    __table_args__ = (
+        UniqueConstraint("PROJECT_KEY", name="UQ_RT_PROJECTS_KEY"),
+        CheckConstraint("STATUS IN ('Active','On hold','Completed','Archived')", name="CK_RT_PROJECT_STATUS"),
+        CheckConstraint("PRIORITY IN ('Critical','High','Medium','Low')", name="CK_RT_PROJECT_PRIORITY"),
+    )
 
     id: Mapped[str] = mapped_column("PROJECT_ID", String(36), primary_key=True)
     name: Mapped[str] = mapped_column("NAME", String(200), nullable=False)
     key: Mapped[str] = mapped_column("PROJECT_KEY", String(12), nullable=False)
     description: Mapped[str | None] = mapped_column("DESCRIPTION", String(1000), nullable=True, default="")
+    workspace_id: Mapped[str | None] = mapped_column("WORKSPACE_ID", String(36), ForeignKey("RT_WORKSPACES.WORKSPACE_ID", ondelete="RESTRICT"), nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column("OWNER_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
+    category: Mapped[str] = mapped_column("CATEGORY", String(80), nullable=False, default="General")
+    status: Mapped[str] = mapped_column("STATUS", String(20), nullable=False, default="Active")
+    priority: Mapped[str] = mapped_column("PRIORITY", String(16), nullable=False, default="Medium")
+    start_date: Mapped[datetime | None] = mapped_column("START_DATE", TIMESTAMP(timezone=True), nullable=True)
+    target_date: Mapped[datetime | None] = mapped_column("TARGET_DATE", TIMESTAMP(timezone=True), nullable=True)
+    objectives: Mapped[str | None] = mapped_column("OBJECTIVES", Text, nullable=True, default="")
+    archived_at: Mapped[datetime | None] = mapped_column("ARCHIVED_AT", TIMESTAMP(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column("DELETED_AT", TIMESTAMP(timezone=True), nullable=True)
     next_requirement_number: Mapped[int] = mapped_column("NEXT_REQUIREMENT_NUMBER", Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class Workspace(Base):
+    __tablename__ = "RT_WORKSPACES"
+    __table_args__ = (UniqueConstraint("WORKSPACE_KEY", name="UQ_RT_WORKSPACE_KEY"),)
+
+    id: Mapped[str] = mapped_column("WORKSPACE_ID", String(36), primary_key=True)
+    name: Mapped[str] = mapped_column("NAME", String(200), nullable=False)
+    key: Mapped[str] = mapped_column("WORKSPACE_KEY", String(24), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column("OWNER_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column("UPDATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class WorkspaceMembership(Base):
+    __tablename__ = "RT_WORKSPACE_MEMBERS"
+    __table_args__ = (
+        UniqueConstraint("WORKSPACE_ID", "USER_ID", name="UQ_RT_WORKSPACE_MEMBER"),
+        CheckConstraint("WORKSPACE_ROLE IN ('Owner','Admin','Editor','Viewer')", name="CK_RT_WORKSPACE_MEMBER_ROLE"),
+        Index("IX_RT_WORKSPACE_MEMBER_USER", "USER_ID", "WORKSPACE_ID"),
+    )
+
+    id: Mapped[str] = mapped_column("MEMBERSHIP_ID", String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column("WORKSPACE_ID", String(36), ForeignKey("RT_WORKSPACES.WORKSPACE_ID", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column("USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column("WORKSPACE_ROLE", String(16), nullable=False, default="Viewer")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class SourceDocument(Base):
+    __tablename__ = "RT_SOURCE_DOCUMENTS"
+    __table_args__ = (Index("IX_RT_DOC_PROJECT_TIME", "PROJECT_ID", "CREATED_AT"),)
+
+    id: Mapped[str] = mapped_column("DOCUMENT_ID", String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    filename: Mapped[str] = mapped_column("FILENAME", String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column("MEDIA_TYPE", String(120), nullable=False)
+    byte_size: Mapped[int] = mapped_column("BYTE_SIZE", Integer, nullable=False)
+    extraction_method: Mapped[str] = mapped_column("EXTRACTION_METHOD", String(32), nullable=False)
+    extracted_text: Mapped[str] = mapped_column("EXTRACTED_TEXT", Text, nullable=False)
+    candidates_json: Mapped[str] = mapped_column("CANDIDATES_JSON", Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
 
 
@@ -41,20 +98,27 @@ class Requirement(Base):
     __tablename__ = "RT_REQUIREMENTS"
     __table_args__ = (
         UniqueConstraint("PROJECT_ID", "REQUIREMENT_CODE", name="UQ_RT_REQ_PROJECT_CODE"),
-        CheckConstraint("REQUIREMENT_TYPE IN ('Functional','Non-functional','Security','Performance','Usability')", name="CK_RT_REQ_TYPE"),
+        CheckConstraint("REQUIREMENT_TYPE IN ('Functional','Non-functional','Security','Performance','Usability','Technical','Interface','Business','Regulatory','Constraint')", name="CK_RT_REQ_TYPE"),
         CheckConstraint("PRIORITY IN ('Critical','High','Medium','Low')", name="CK_RT_REQ_PRIORITY"),
         CheckConstraint("SOURCE_TYPE IN ('Conversation','Document','Manual')", name="CK_RT_REQ_SOURCE"),
-        CheckConstraint("STATUS IN ('Draft','Under review','Approved','Rejected')", name="CK_RT_REQ_STATUS"),
+        CheckConstraint("STATUS IN ('Draft','Under review','Approved','In progress','Implemented','Verified','Rejected','Archived')", name="CK_RT_REQ_STATUS"),
         Index("IX_RT_REQ_PROJECT_STATUS", "PROJECT_ID", "STATUS"),
+        Index("IX_RT_REQ_SOURCE_DOCUMENT", "SOURCE_DOCUMENT_ID"),
     )
 
     id: Mapped[str] = mapped_column("REQUIREMENT_ID", String(36), primary_key=True)
     project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
+    source_document_id: Mapped[str | None] = mapped_column("SOURCE_DOCUMENT_ID", String(36), ForeignKey("RT_SOURCE_DOCUMENTS.DOCUMENT_ID", name="FK_RT_REQ_SOURCE_DOC", ondelete="SET NULL"), nullable=True)
     code: Mapped[str] = mapped_column("REQUIREMENT_CODE", String(40), nullable=False)
     title: Mapped[str] = mapped_column("TITLE", String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column("DESCRIPTION", Text, nullable=True, default="")
     statement: Mapped[str] = mapped_column("STATEMENT", Text, nullable=False)
     requirement_type: Mapped[str] = mapped_column("REQUIREMENT_TYPE", String(32), nullable=False)
     priority: Mapped[str] = mapped_column("PRIORITY", String(16), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column("OWNER_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
+    verification_method: Mapped[str] = mapped_column("VERIFICATION_METHOD", String(32), nullable=False, default="Test")
+    current_version: Mapped[int] = mapped_column("CURRENT_VERSION", Integer, nullable=False, default=1)
+    tags: Mapped[list[str]] = mapped_column("TAGS", JSONText(), nullable=False, default=list)
     actor: Mapped[str | None] = mapped_column("ACTOR", String(500), nullable=True, default="")
     preconditions: Mapped[str | None] = mapped_column("PRECONDITIONS", Text, nullable=True, default="")
     acceptance_criteria: Mapped[list[str]] = mapped_column("ACCEPTANCE_CRITERIA", JSONText(), nullable=False)
@@ -259,6 +323,7 @@ class AutomationRun(Base):
 
 class RequirementVersion(Base):
     __tablename__ = "RT_REQUIREMENT_VERSIONS"
+    __table_args__ = (UniqueConstraint("REQUIREMENT_ID", "VERSION_NUMBER", name="UQ_RT_REQ_VERSION_NUM"),)
     __table_args__ = (UniqueConstraint("REQUIREMENT_ID", "VERSION_NUMBER", name="UQ_RT_REQ_VERSION_NUM"),
         Index("IX_RT_REQ_VERSION_TIME", "REQUIREMENT_ID", "CREATED_AT"))
 
