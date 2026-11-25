@@ -18,9 +18,19 @@ SQLite. Dedicated Documents and Activity screens call the persisted API.
 
 Validation added with this refresh includes a registered-route auth sweep,
 workspace boundary and recovery flows, serverless storage/config tests, and
-front-end production build. A live Vercel deployment, database provider, SMTP,
-Redis, and browser E2E run have not been executed; deployment still requires
-provider credentials and configured secrets.
+front-end production build. On 2026-11-25 the configured backend URL returned
+HTTP 500 `FUNCTION_INVOCATION_FAILED`. Vercel's request logs redirected to its
+login screen, and this checkout has no linked Vercel project or CLI, so the
+startup exception and production environment values could not be inspected.
+Treat the live API as unavailable until those logs and variables are checked.
+Do not relax the fail-closed startup checks to hide this failure.
+
+The initial follow-up implementation expands the tenant-boundary test to cover
+project documents, requirements, audit, traceability, cases, executions,
+defects, conversations, GitHub records, automation, and requirement-owned
+records/actions. It verifies that an unrelated workspace membership and a
+legacy project-membership row do not grant cross-workspace access. This is a
+representative route family matrix; a complete role/action matrix remains open.
 
 ## Architecture
 
@@ -54,7 +64,7 @@ provider credentials and configured secrets.
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
 | Security | Loopback sidecar default, server-side secrets, input schemas, signed-token auth, workspace Owner/Admin/Editor/Viewer roles, per-request token-version validation, route coverage, account recovery, configurable CORS, actor-attributed audit | Workspace isolation and route-by-route unauthenticated rejection are tested. Redis provides shared public rate limits; public config fails closed on missing HTTPS origins, TLS database, Redis, or email recovery. Live deployment/infra verification remains open. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
-| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest complete run: 47 backend tests, TypeScript check, and Vite production build pass. PostgreSQL Alembic offline SQL generation is covered. One Starlette/httpx deprecation warning remains. No live hosted services, repeat desktop packaging, frontend E2E suite, or clean-machine installer verification. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Current run: 48 backend tests passed; `tsc --noEmit` and Vite production build passed; Windows NSIS installer exists at `src-tauri/target/release/bundle/nsis/ReqTrace AI_0.1.0_x64-setup.exe` (30,297,675 bytes). One Starlette/httpx deprecation warning remains. No live hosted database/Redis/SMTP, frontend E2E suite, or clean-machine installer verification. |
 
 ## Route inventory
 
@@ -91,19 +101,18 @@ provider credentials and configured secrets.
 | Test Management | No persisted cases | Case CRUD, AI suggestions, manual execution history | Core API tested; suites, assignment, automation remain open |
 | GitHub | No integration | Server-side token, manual read-only import and requirement links | Mock tested; live account, OAuth, webhooks unverified/absent |
 | AI Assistant | No grounded assistant | Project-record retrieval, citations, stored conversations, local fallback | API fallback/history/scoping tested; live provider and streaming incomplete |
-| Authentication and access | No accounts or API authorization | PBKDF2 accounts, signed expiring tokens, system Admin roles, workspace Owner/Admin/Editor/Viewer roles, explicit legacy project membership, scoped project and record routes | Workspace isolation tests pass; global account lifecycle UI, password reset, external identity, and deployment hardening remain open |
+| Authentication and access | No accounts or API authorization | PBKDF2 accounts, signed expiring tokens, system Admin roles, workspace Owner/Admin/Editor/Viewer roles, scoped project and record routes, password change/recovery, immediate token revocation, actor-attributed audit, shared Redis rate limits | Core policies and recovery paths have automated coverage. External identity, account lifecycle UI, and live deployment validation remain open |
 
 This summary does not imply production readiness. The security and verification
 gates below still apply.
 
 ## Risks and release boundary
 
-1. The largest release blocker is incomplete authorization and deployment
-   security. Oracle mode requires signed bearer tokens and now has project
-   membership guards, but global account lifecycle remains API-only and the
-   full route matrix still needs a dedicated security review. Add password recovery,
-   distributed request limits, organization
-   tenancy, and deployment hardening before shared hosting.
+1. The hosted API URL currently returns HTTP 500. The exact Vercel startup
+   error is unknown because project logs and environment settings were not
+   accessible. Verify the Vercel project Root Directory (`backend`) and required
+   PostgreSQL/TLS, bootstrap auth, HTTPS origins/CORS, TLS Redis, and TLS SMTP
+   variables before changing application security policy.
 2. Oracle connectivity and schema upgrades were not exercised against a live
    Oracle instance in this environment. `python-oracledb` Thin mode supports
    newer Oracle versions; Oracle 11g requires a compatible Instant Client and
@@ -114,13 +123,35 @@ gates below still apply.
 4. Full traceability is not available for design components or development
    tasks. Test suites, broader defect workflows, OCR, PDF/XLSX exports, and
    automation scheduling remain incomplete.
-5. The desktop packaging build passed locally, but installation, upgrade,
-   persistence retention, signing, and uninstall behavior need a clean Windows
-   machine test.
+5. The desktop packaging build produced a local NSIS installer, but
+   installation, upgrade, persistence retention, signing, and uninstall
+   behavior need a clean Windows machine test.
+
+The current open security/deployment work is **verification and operational
+access**, not the earlier unimplemented-auth baseline: the source contains
+workspace scoping, account recovery, shared rate limiting, and fail-closed
+public deployment validation. The registered-route sweep proves authentication
+is required; it is not a substitute for a dedicated positive/negative
+authorization matrix for every route and role.
 
 ## Verification record
 
-For the 2026-11-25 workspace, lifecycle, and requirement workflow update:
+Current audit run (2026-11-25):
+
+- Backend: 48 passed, one Starlette/httpx deprecation warning.
+- Authorization follow-up: cross-workspace probes for 19 project and
+  project-owned read/write routes passed (including rejection after membership
+  only in a different workspace).
+- `npm exec tsc -- --noEmit`: passed; `npm run build`: passed.
+- `npm run desktop:build`: completed without captured console output in this
+  shell, but the NSIS installer is present (30,297,675 bytes).
+- Live `https://backend-iota-blue-41.vercel.app/api/v1/health`: HTTP 500
+  `FUNCTION_INVOCATION_FAILED`; Vercel logs required interactive sign-in.
+- Working tree was clean before this audit; no Vercel project link/config was
+  present in the checkout.
+
+Historical verification for the 2026-11-25 workspace, lifecycle, and
+requirement workflow update:
 
 - Backend suite: 37 passed, with one Starlette/httpx deprecation warning.
 - `npm exec tsc -- --noEmit` and `npm run build` passed.

@@ -46,19 +46,62 @@ starts serialize through an advisory lock. Vercel uses `backend/index.py` and
 the repository-root SPA rewrite; SQLite is reported ephemeral there. Dedicated
 Documents and Activity screens now use the real persistent APIs.
 
-The live deployment remains unverified until a Vercel project, persistent
-database, Redis, SMTP credentials, and environment secrets are configured.
+The live backend is currently failing: the configured API URL returned HTTP
+500 `FUNCTION_INVOCATION_FAILED` on 2026-11-25. Its Vercel logs require an
+interactive sign-in and this checkout is not linked to a Vercel project, so
+the startup exception and deployed environment cannot be verified here. Check
+that the backend Root Directory is `backend` and that all required public
+variables are set: persistent PostgreSQL with TLS, auth/bootstrap values,
+HTTPS API/app origins, exact HTTPS CORS, TLS Redis, and TLS SMTP recovery. Do
+not disable fail-closed checks to make the function start.
 
 ## Current build boundary
 
 The local SQLite, PostgreSQL and Oracle adapters, Alembic history,
 Tauri/PyInstaller packaging, and product modules have since been implemented
-incrementally. Oracle server
-mode remains a database development adapter, not a production team service.
-Oracle mode now requires an initial bearer-authentication foundation with
-global roles, but remote synchronization and project-level authorization are
-incomplete. Keep the API on loopback; no network service is safe to expose
-until the remaining controls and deployment verification are complete.
+incrementally. Workspace authorization, account recovery, token revocation,
+actor-attributed audit, Redis-backed public rate limits, and public deployment
+configuration checks are present. Oracle connectivity and schema upgrades
+remain unverified against a live Oracle server. Shared deployment remains
+blocked by the failing/uninspectable Vercel runtime, not by the old missing-auth
+baseline.
+
+## Current prioritized implementation plan (2026-11-25)
+
+1. **P0 — Restore and verify hosted API.** Obtain access to the Vercel project
+   logs and environment settings; verify backend Root Directory, Python runtime,
+   PostgreSQL TLS URL, auth/bootstrap variables, HTTPS origins/CORS, Redis TLS,
+   and SMTP recovery. Redeploy and verify health, login, workspace isolation,
+   and persistent writes. The API currently returns HTTP 500; no production
+   setting can be changed from this checkout.
+2. **P1 — Expand authorization acceptance tests (in progress).** The first
+   slice now probes 19 project and project-owned read/write route paths against
+   users with no membership and membership in a different workspace; the tenant
+   test passes. Add remaining system Admin and workspace
+   Owner/Admin/Editor/Viewer actions and cross-workspace record IDs. The
+   registered-route sweep verifies that routes
+   reject missing authentication; it does not exhaustively verify every role
+   policy.
+3. **P1 — Frontend modularization.** Gradually move screens, hooks, shared UI,
+   types, and API access out of the oversized `src/App.tsx`, preserving the
+   existing shell, routes, and visual identity. Add route-level browser tests
+   before broad structural changes.
+4. **P2 — Close traceability and testing gaps.** Add test suites, evidence
+   attachments, richer defect history, and design/task nodes, then validate
+   coverage, orphan, failed-test, and impact views against persisted records.
+5. **P2 — Production operations and AI verification.** Add deploy/CI checks,
+   structured request logs and monitoring, live provider tests with safe test
+   credentials, and backup/restore plus clean-machine desktop install/upgrade
+   coverage.
+
+### Current verification snapshot
+
+- Backend: 48 tests pass (one Starlette/httpx deprecation warning).
+- Frontend: TypeScript check and production Vite build pass.
+- Desktop: NSIS installer present at
+  `src-tauri/target/release/bundle/nsis/ReqTrace AI_0.1.0_x64-setup.exe`.
+- Hosted API: health request returns HTTP 500; Vercel logs and project settings
+  are inaccessible without interactive account access.
 
 ## Audit and hardening update (historical baseline, 2026-11-17)
 
@@ -226,7 +269,7 @@ been superseded by the progress records above. The latest traceability
 milestone adds requirement-linked test/run/defect/GitHub references to the
 matrix; it does not model design components or development task records.
 
-### Delivery gates still open
+### Historical delivery gates (2026-11-18; superseded by current prioritized plan)
 
 1. **Secure shared service (P0):** auth now provides a bootstrap admin, PBKDF2
    password hashes, expiring HMAC bearer tokens, database-verified current

@@ -747,6 +747,22 @@ def test_workspace_membership_is_a_hard_tenant_boundary(client: TestClient, monk
     workspace_a = client.post("/api/v1/workspaces", json={"name": "Tenant A", "key": "TENANT-A"}, headers=admin_headers).json()
     workspace_b = client.post("/api/v1/workspaces", json={"name": "Tenant B", "key": "TENANT-B"}, headers=admin_headers).json()
     project = client.post("/api/v1/projects", json={"name": "Private A", "key": "PRIVATE-A", "workspaceId": workspace_a["id"]}, headers=admin_headers).json()
+    requirement = client.post(f"/api/v1/projects/{project['id']}/requirements", json={
+        "title": "Tenant A requirement", "statement": "Only workspace A members may read this.",
+        "type": "Functional", "priority": "High", "sourceType": "Manual",
+        "sourceReference": "Manual", "originalText": "Tenant A requirement",
+    }, headers=admin_headers).json()
+    test_case = client.post(f"/api/v1/projects/{project['id']}/test-cases", json={
+        "requirementId": requirement["id"], "title": "Tenant A case",
+        "steps": ["Check workspace boundary"], "expectedResult": "Access is scoped.",
+    }, headers=admin_headers).json()
+    defect = client.post(f"/api/v1/projects/{project['id']}/defects", json={
+        "requirementId": requirement["id"], "testCaseId": test_case["id"],
+        "title": "Tenant A defect", "description": "Private to workspace A.",
+    }, headers=admin_headers).json()
+    conversation = client.post(f"/api/v1/projects/{project['id']}/assistant/messages", json={
+        "message": "Summarize this private project",
+    }, headers=admin_headers).json()["conversation"]
     outsider_member = client.post(f"/api/v1/projects/{project['id']}/members", json={"userId": "tenant-editor", "role": "Editor"}, headers=admin_headers)
     assert outsider_member.status_code == 422
     session_generator = app.dependency_overrides[get_db](None)
@@ -757,10 +773,35 @@ def test_workspace_membership_is_a_hard_tenant_boundary(client: TestClient, monk
     session_generator.close()
     assert client.get(f"/api/v1/projects/{project['id']}", headers=editor_headers).status_code == 403
     assert client.get("/api/v1/projects", headers=editor_headers).json() == []
+    private_reads = [
+        f"/api/v1/projects/{project['id']}/documents",
+        f"/api/v1/projects/{project['id']}/requirements",
+        f"/api/v1/projects/{project['id']}/audit",
+        f"/api/v1/projects/{project['id']}/traceability",
+        f"/api/v1/projects/{project['id']}/test-cases",
+        f"/api/v1/projects/{project['id']}/test-executions",
+        f"/api/v1/projects/{project['id']}/defects",
+        f"/api/v1/projects/{project['id']}/conversations",
+        f"/api/v1/projects/{project['id']}/github/repositories",
+        f"/api/v1/projects/{project['id']}/github/links",
+        f"/api/v1/projects/{project['id']}/automation/rules",
+        f"/api/v1/projects/{project['id']}/automation/runs",
+        f"/api/v1/requirements/{requirement['id']}/versions",
+        f"/api/v1/requirements/{requirement['id']}/comments",
+        f"/api/v1/requirements/{requirement['id']}/analyses",
+        f"/api/v1/conversations/{conversation['id']}/messages",
+    ]
+    for path in private_reads:
+        assert client.get(path, headers=editor_headers).status_code == 403, path
+    assert client.post(f"/api/v1/requirements/{requirement['id']}/generate-test-cases", json={}, headers=editor_headers).status_code == 403
+    assert client.post(f"/api/v1/test-cases/{test_case['id']}/executions", json={}, headers=editor_headers).status_code == 403
+    assert client.patch(f"/api/v1/defects/{defect['id']}", json={}, headers=editor_headers).status_code == 403
 
     assert client.post(f"/api/v1/workspaces/{workspace_b['id']}/members", json={"userId": "tenant-editor", "role": "Editor"}, headers=admin_headers).status_code == 201
     assert client.get(f"/api/v1/projects/{project['id']}", headers=editor_headers).status_code == 403
     assert client.get("/api/v1/projects", headers=editor_headers).json() == []
+    for path in private_reads:
+        assert client.get(path, headers=editor_headers).status_code == 403, path
 
     assert client.post(f"/api/v1/workspaces/{workspace_a['id']}/members", json={"userId": "tenant-editor", "role": "Editor"}, headers=admin_headers).status_code == 201
     assert client.get(f"/api/v1/projects/{project['id']}", headers=editor_headers).status_code == 200
