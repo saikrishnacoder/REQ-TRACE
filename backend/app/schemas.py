@@ -28,6 +28,28 @@ class LoginResponse(APIModel):
     user: dict[str, str]
 
 
+class PasswordChangeRequest(APIModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
+class PasswordResetRequest(APIModel):
+    email: str = Field(min_length=5, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized.count("@") != 1 or "." not in normalized.rsplit("@", 1)[-1]:
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+
+class PasswordResetComplete(APIModel):
+    token: str = Field(min_length=32, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class UserAccountCreate(APIModel):
     email: str = Field(min_length=5, max_length=320)
     password: str = Field(min_length=12, max_length=256)
@@ -356,8 +378,19 @@ class AuditEventRead(APIModel):
     id: str
     project_id: str
     requirement_id: str | None
+    actor_user_id: str | None = None
     action: str
     detail: str
+    created_at: datetime
+
+
+class AccountSecurityEventRead(APIModel):
+    id: str
+    actor_user_id: str | None
+    subject_user_id: str | None
+    workspace_id: str | None
+    action: str
+    detail: dict[str, Any]
     created_at: datetime
 
 

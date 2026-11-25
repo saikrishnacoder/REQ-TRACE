@@ -77,12 +77,14 @@ interface PendingWrite {
 
 const OUTBOX_KEY = 'reqtrace.outbox.v1';
 const SESSION_TOKEN_KEY = 'reqtrace.auth.session.v1';
+const SESSION_USER_KEY = 'reqtrace.auth.user.v1';
 const API_BASE = (import.meta.env.VITE_API_URL || (isTauri() ? 'http://127.0.0.1:8000/api/v1' : '/api/v1')).replace(/\/$/, '');
-type DatabaseKind = 'sqlite' | 'oracle' | string;
+type DatabaseKind = 'sqlite' | 'oracle' | 'postgresql';
 
 export interface AuthSession { accessToken: string; tokenType: string; expiresIn: number; user: { id: string; email: string; role: string } }
 export interface AuthIdentity { authenticated: boolean; authRequired: boolean; id?: string; email?: string; role?: string }
 export interface UserAccountRecord { id: string; email: string; role: string; active: boolean; createdAt: string }
+export interface AccountSecurityEventRecord { id: string; actorUserId: string | null; subjectUserId: string | null; workspaceId: string | null; action: string; detail: Record<string, unknown>; createdAt: string }
 export interface WorkspaceRecord { id: string; name: string; key: string; ownerUserId: string | null; createdAt: string; updatedAt: string }
 export interface WorkspaceMemberRecord { id: string; workspaceId: string; userId: string; role: 'Owner' | 'Admin' | 'Editor' | 'Viewer'; createdAt: string }
 export const getWorkspaces = () => request<WorkspaceRecord[]>('/workspaces');
@@ -100,14 +102,21 @@ export interface ProjectMemberRecord { id: string; projectId: string; userId: st
 export async function login(email: string, password: string): Promise<AuthSession> {
   const session = await request<AuthSession>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
   sessionStorage.setItem(SESSION_TOKEN_KEY, session.accessToken);
+  sessionStorage.setItem(SESSION_USER_KEY, session.user.id);
   return session;
 }
 
-export function logout() { sessionStorage.removeItem(SESSION_TOKEN_KEY); }
+export function logout() { sessionStorage.removeItem(SESSION_TOKEN_KEY); sessionStorage.removeItem(SESSION_USER_KEY); }
 export function hasAuthSession() { return Boolean(sessionStorage.getItem(SESSION_TOKEN_KEY)); }
+export function getRemoteCacheKey(key: string) { return `${key}.${sessionStorage.getItem(SESSION_USER_KEY) || 'unknown-account'}`; }
 export const getCurrentUser = () => request<AuthIdentity>('/auth/me');
 export const getUserAccounts = () => request<UserAccountRecord[]>('/auth/users');
-export const createUserAccount = (email: string, password: string, role: 'Editor' | 'Viewer') => request<UserAccountRecord>('/auth/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+export const createUserAccount = (email: string, password: string, role: 'Admin' | 'Editor' | 'Viewer') => request<UserAccountRecord>('/auth/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+export const updateUserAccount = (id: string, changes: { role?: 'Admin' | 'Editor' | 'Viewer'; active?: boolean }) => request<UserAccountRecord>(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(changes) });
+export const getAccountSecurityAudit = () => request<AccountSecurityEventRecord[]>('/auth/audit');
+export const changeAccountPassword = (currentPassword: string, newPassword: string) => request<void>('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+export const requestPasswordReset = (email: string) => request<{ message: string }>('/auth/password-reset-requests', { method: 'POST', body: JSON.stringify({ email }) });
+export const completePasswordReset = (token: string, newPassword: string) => request<void>('/auth/password-resets', { method: 'POST', body: JSON.stringify({ token, newPassword }) });
 export const getProjectMembers = (projectId: string) => request<ProjectMemberRecord[]>(`/projects/${projectId}/members`);
 export const addProjectMember = (projectId: string, userId: string, role: 'Editor' | 'Viewer') => request<ProjectMemberRecord>(`/projects/${projectId}/members`, { method: 'POST', body: JSON.stringify({ userId, role }) });
 export const removeProjectMember = (projectId: string, userId: string) => request<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' });
@@ -125,14 +134,18 @@ function describeError(error: unknown) {
 
 function readOutbox(): PendingWrite[] {
   try {
-    return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') as PendingWrite[];
+    const userKey = sessionStorage.getItem(SESSION_USER_KEY);
+    const key = userKey ? `${OUTBOX_KEY}.${userKey}` : OUTBOX_KEY;
+    return JSON.parse(localStorage.getItem(key) || '[]') as PendingWrite[];
   } catch (error) {
     return [];
   }
 }
 
 function writeOutbox(items: PendingWrite[]) {
-  localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
+  const userKey = sessionStorage.getItem(SESSION_USER_KEY);
+  const key = userKey ? `${OUTBOX_KEY}.${userKey}` : OUTBOX_KEY;
+  localStorage.setItem(key, JSON.stringify(items));
 }
 
 let outboxFlush: Promise<void> | null = null;
@@ -197,7 +210,8 @@ function mergeRemote<T extends { id: string }>(local: T[], remote: T[]): T[] {
 export async function connectBackend(localProjects: ProjectRecord[], localRequirements: RequirementRecord[]) {
   try {
     const health = await request<{ database: DatabaseKind }>('/health');
-    if (health.database === 'oracle') {
+    if (health.database !== 'sqlite') {
+      await flushOutbox();
       const projects = await request<ProjectRecord[]>('/projects');
       const requirementsByProject = await Promise.all(projects.map((project) => request<RequirementRecord[]>(`/projects/${project.id}/requirements`)));
       const pending = pendingWriteCount();
@@ -209,7 +223,7 @@ export async function connectBackend(localProjects: ProjectRecord[], localRequir
         projects,
         requirements: requirementsByProject.flat(),
         pending,
-        error: pending || localOnly ? 'Local browser data stays on this device. Oracle does not import cached projects or pending local writes automatically.' : null,
+        error: pending || localOnly ? 'Browser-cached records and pending changes are kept separate from the shared database. Review and import them deliberately.' : null,
       };
     }
     await flushOutbox();
@@ -256,10 +270,10 @@ export async function queueWrite(method: PendingWrite['method'], path: string, b
   try {
     const health = await request<{ database: DatabaseKind }>('/health');
     remoteDatabase = health.database;
-    if (health.database === 'oracle') {
+    if (health.database !== 'sqlite') {
       await request(path, { method, ...(method === 'DELETE' ? {} : { body: JSON.stringify(body) }) });
       const pending = pendingWriteCount();
-      return { online: true, database: health.database, pending, error: pending ? 'Older local browser changes remain queued and were not copied to Oracle.' : null };
+      return { online: true, database: health.database, pending, error: pending ? 'Older browser changes remain queued for this account.' : null };
     }
     const queue = readOutbox();
     queue.push({ id: crypto.randomUUID(), method, path, body });
@@ -270,7 +284,7 @@ export async function queueWrite(method: PendingWrite['method'], path: string, b
     if (error instanceof APIError && error.status < 500) {
       return { online: Boolean(remoteDatabase), database: remoteDatabase, pending: pendingWriteCount(), error: error.message };
     }
-    if (remoteDatabase !== 'oracle') {
+    if (remoteDatabase === 'sqlite' || remoteDatabase === null) {
       const queue = readOutbox();
       queue.push({ id: crypto.randomUUID(), method, path, body });
       writeOutbox(queue);
@@ -311,7 +325,7 @@ export const getRequirementAnalyses = (id: string) => request<RequirementAnalysi
 export interface TestExecutionRecord { id: string; projectId: string; testCaseId: string; status: 'Passed' | 'Failed' | 'Blocked' | 'Skipped'; actualResult: string; executedAt: string }
 export const getTestExecutions = (projectId: string) => request<TestExecutionRecord[]>(`/projects/${projectId}/test-executions`);
 export const createTestExecution = (testCaseId: string, status: TestExecutionRecord['status'], actualResult: string) => request<TestExecutionRecord>(`/test-cases/${testCaseId}/executions`, { method: 'POST', body: JSON.stringify({ status, actualResult }) });
-export interface AuditRecord { id: string; projectId: string; requirementId: string | null; action: string; detail: string; createdAt: string }
+export interface AuditRecord { id: string; projectId: string; requirementId: string | null; actorUserId?: string | null; action: string; detail: string; createdAt: string }
 export const getProjectAudit = (projectId: string) => request<AuditRecord[]>(`/projects/${projectId}/audit`);
 export interface ConversationRecord { id: string; projectId: string; title: string; createdAt: string; updatedAt: string }
 export interface ConversationMessageRecord { id: string; conversationId: string; role: 'user' | 'assistant'; content: string; sources: { type: string; id: string; code: string; title: string; path: string }[]; provider: string; createdAt: string }

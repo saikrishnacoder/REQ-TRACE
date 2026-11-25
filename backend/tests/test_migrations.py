@@ -23,7 +23,7 @@ def test_upgrade_creates_a_fresh_schema(tmp_path) -> None:
     upgrade_on(engine)
 
     tables = set(inspect(engine).get_table_names())
-    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_SOURCE_DOCUMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "RT_USERS", "RT_PROJECT_MEMBERS", "alembic_version"} <= tables
+    assert {"RT_PROJECTS", "RT_REQUIREMENTS", "RT_SOURCE_DOCUMENTS", "RT_AUDIT_EVENTS", "RT_SYNC_OUTBOX", "RT_REQUIREMENT_LINKS", "RT_USERS", "RT_PROJECT_MEMBERS", "RT_ACCOUNT_SECURITY_EVENTS", "RT_PASSWORD_RESET_TOKENS", "alembic_version"} <= tables
     engine.dispose()
 
 
@@ -38,9 +38,11 @@ def test_upgrade_preserves_data_from_create_all_schema(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert connection.execute(text("SELECT NAME FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "Legacy"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261124_0014"
-        assert {"RT_USERS", "RT_PROJECT_MEMBERS", "RT_WORKSPACES", "RT_WORKSPACE_MEMBERS", "RT_SOURCE_DOCUMENTS"} <= set(inspect(engine).get_table_names())
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261125_0015"
+        assert {"RT_USERS", "RT_PROJECT_MEMBERS", "RT_WORKSPACES", "RT_WORKSPACE_MEMBERS", "RT_SOURCE_DOCUMENTS", "RT_ACCOUNT_SECURITY_EVENTS", "RT_PASSWORD_RESET_TOKENS"} <= set(inspect(engine).get_table_names())
         assert connection.execute(text("SELECT WORKSPACE_ID FROM RT_PROJECTS WHERE PROJECT_ID='legacy-project'")).scalar_one() == "default-workspace"
+        assert "token_version" in {column["name"].casefold() for column in inspect(engine).get_columns("RT_USERS")}
+        assert "actor_user_id" in {column["name"].casefold() for column in inspect(engine).get_columns("RT_AUDIT_EVENTS")}
     engine.dispose()
 
 

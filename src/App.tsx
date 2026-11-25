@@ -4,12 +4,12 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate }
 import {
   ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, FileText, FolderKanban, GitBranch, Github, Inbox, Layers3,
-  ListChecks, LogOut, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck,
+  ListChecks, LogOut, MessageSquareText, Network, Plus, Search, Settings2, ShieldCheck, History,
   Download, Sparkles, Trash2, Upload, Workflow, X
 } from 'lucide-react';
-import { addProjectMember, bulkDeleteRequirements, bulkUpdateRequirements, connectBackend, createWorkspace as createWorkspaceApi, createUserAccount, duplicateProject as duplicateProjectApi, getCurrentUser, getProjectMembers, getUserAccounts, getWorkspaces, hasAuthSession, login, logout, pendingWriteCount, queueWrite, removeProjectMember } from './services/persistence';
+import { addProjectMember, bulkDeleteRequirements, bulkUpdateRequirements, changeAccountPassword, completePasswordReset, connectBackend, createWorkspace as createWorkspaceApi, createUserAccount, duplicateProject as duplicateProjectApi, getAccountSecurityAudit, getCurrentUser, getProjectMembers, getRemoteCacheKey, getUserAccounts, getWorkspaces, hasAuthSession, login, logout, pendingWriteCount, queueWrite, requestPasswordReset, removeProjectMember, updateUserAccount } from './services/persistence';
 import { analyzeRequirement, createDefect, createGitHubRequirementLink, createRequirementComment, createTestCase, createTestExecution, extractProjectDocument, generateTestCaseSuggestions, getAvailableGitHubRepositories, getAutomationRules, getAutomationRuns, getConversationMessages, getConversations, getDefects, getGitHubStatus, getProjectAudit, getProjectDocuments, getProjectGitHubData, getRequirementAnalyses, getRequirementComments, getRequirementVersions, getTestCases, getTestExecutions, getTraceability, runAutomationRule, sendAssistantMessage, setAutomationRule, syncGitHubRepository, updateDefect } from './services/persistence';
-import type { AuditRecord, AuthIdentity, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, ProjectMemberRecord, ProjectRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, SourceDocumentRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot, UserAccountRecord, WorkspaceRecord } from './services/persistence';
+import type { AccountSecurityEventRecord, AuditRecord, AuthIdentity, AutomationRuleRecord, AutomationRunRecord, ConversationMessageRecord, ConversationRecord, DefectRecord, GitHubRecord, GitHubRepositoryRecord, ProjectMemberRecord, ProjectRecord, RequirementAnalysisRecord, RequirementCommentRecord, RequirementVersionRecord, SourceDocumentRecord, TestCaseRecord, TestCaseSuggestionRecord, TestExecutionRecord, TraceabilitySnapshot, UserAccountRecord, WorkspaceRecord } from './services/persistence';
 
 type RequirementStatus = 'Draft' | 'Under review' | 'Approved' | 'In progress' | 'Implemented' | 'Verified' | 'Rejected' | 'Archived';
 type RequirementType = 'Functional' | 'Non-functional' | 'Performance' | 'Security' | 'Usability' | 'Technical' | 'Interface' | 'Business' | 'Regulatory' | 'Constraint';
@@ -118,48 +118,62 @@ function normalizeRequirements(projects: Project[], cached = readStorage<unknown
 }
 
 type BackendState = 'checking' | 'online' | 'offline';
-type DatabaseKind = 'sqlite' | 'oracle' | null;
+type DatabaseKind = 'sqlite' | 'oracle' | 'postgresql' | null;
+
+function normalizeDatabaseKind(database: string | null): DatabaseKind {
+  return database === 'sqlite' || database === 'oracle' || database === 'postgresql' ? database : null;
+}
+
+function databaseLabel(database: DatabaseKind) {
+  return database === 'oracle' ? 'Oracle database' : database === 'postgresql' ? 'PostgreSQL database' : 'Local database';
+}
 
 function App() {
-  const [projects, setProjects] = useState<Project[]>(() => readStorage(hasAuthSession() ? STORAGE.remoteProjects : STORAGE.projects, []));
-  const [requirements, setRequirements] = useState<Requirement[]>(() => normalizeRequirements(readStorage(hasAuthSession() ? STORAGE.remoteProjects : STORAGE.projects, []), readStorage(hasAuthSession() ? STORAGE.remoteRequirements : STORAGE.requirements, [])));
+  const [projects, setProjects] = useState<Project[]>(() => readStorage(hasAuthSession() ? getRemoteCacheKey(STORAGE.remoteProjects) : STORAGE.projects, []));
+  const [requirements, setRequirements] = useState<Requirement[]>(() => normalizeRequirements(readStorage(hasAuthSession() ? getRemoteCacheKey(STORAGE.remoteProjects) : STORAGE.projects, []), readStorage(hasAuthSession() ? getRemoteCacheKey(STORAGE.remoteRequirements) : STORAGE.requirements, [])));
   const [selectedProjectId, setSelectedProjectId] = useState(() => readStorage(STORAGE.selected, ''));
   const [backendState, setBackendState] = useState<BackendState>('checking');
   const [backendDatabase, setBackendDatabase] = useState<DatabaseKind>(null);
   const [pendingCount, setPendingCount] = useState(() => pendingWriteCount());
   const [syncError, setSyncError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
+  const [identity, setIdentity] = useState<AuthIdentity | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const nextRequirementNumbers = useRef<Record<string, number>>({});
   const currentProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
 
   useEffect(() => {
-    const requireLogin = () => setAuthRequired(true);
+    const requireLogin = () => { setAuthRequired(true); setIdentity(null); };
     window.addEventListener('reqtrace:auth-required', requireLogin);
     return () => window.removeEventListener('reqtrace:auth-required', requireLogin);
   }, []);
 
-  const persistToRemoteCache = backendDatabase === 'oracle' || (backendDatabase === null && hasAuthSession());
-  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? STORAGE.remoteProjects : STORAGE.projects, JSON.stringify(projects)); }, [projects, backendState, persistToRemoteCache, authRequired]);
-  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? STORAGE.remoteRequirements : STORAGE.requirements, JSON.stringify(requirements)); }, [requirements, backendState, persistToRemoteCache, authRequired]);
+  const persistToRemoteCache = backendDatabase === 'oracle' || backendDatabase === 'postgresql' || (backendDatabase === null && hasAuthSession());
+  const remoteProjectsKey = getRemoteCacheKey(STORAGE.remoteProjects);
+  const remoteRequirementsKey = getRemoteCacheKey(STORAGE.remoteRequirements);
+  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? remoteProjectsKey : STORAGE.projects, JSON.stringify(projects)); }, [projects, backendState, persistToRemoteCache, authRequired, remoteProjectsKey]);
+  useEffect(() => { if (backendState !== 'checking' && !authRequired) localStorage.setItem(persistToRemoteCache ? remoteRequirementsKey : STORAGE.requirements, JSON.stringify(requirements)); }, [requirements, backendState, persistToRemoteCache, authRequired, remoteRequirementsKey]);
   useEffect(() => {
     let active = true;
     let syncing: Promise<void> | null = null;
     const sync = () => {
       if (syncing) return syncing;
-      const localProjects = readStorage<Project[]>(STORAGE.projects, []);
-      const localRequirements = normalizeRequirements(localProjects);
+      const cacheProjectKey = hasAuthSession() ? getRemoteCacheKey(STORAGE.remoteProjects) : STORAGE.projects;
+      const cacheRequirementKey = hasAuthSession() ? getRemoteCacheKey(STORAGE.remoteRequirements) : STORAGE.requirements;
+      const localProjects = readStorage<Project[]>(cacheProjectKey, []);
+      const localRequirements = normalizeRequirements(localProjects, readStorage<Requirement[]>(cacheRequirementKey, []));
       syncing = connectBackend(localProjects, localRequirements).then(async (snapshot) => {
       if (!active) return;
       setBackendState(snapshot.online ? 'online' : 'offline');
-      setBackendDatabase(snapshot.database === 'oracle' ? 'oracle' : snapshot.database === 'sqlite' ? 'sqlite' : null);
+      setBackendDatabase(normalizeDatabaseKind(snapshot.database));
       setPendingCount(snapshot.pending);
       setSyncError(snapshot.error);
       if (snapshot.online) {
         setProjects(snapshot.projects);
         setRequirements(snapshot.requirements);
         setAuthRequired(false);
-        try { setWorkspaces(await getWorkspaces()); } catch { setWorkspaces([]); }
+         try { setWorkspaces(await getWorkspaces()); } catch { setWorkspaces([]); }
+         try { setIdentity(await getCurrentUser()); } catch { setIdentity(null); }
       }
       }).finally(() => { syncing = null; });
       return syncing;
@@ -265,16 +279,18 @@ function App() {
 
   function updateConnectionStatus(result: { online: boolean; database: string | null; pending: number; error: string | null }) {
     setBackendState(result.online ? 'online' : 'offline');
-    setBackendDatabase(result.database === 'oracle' ? 'oracle' : result.database === 'sqlite' ? 'sqlite' : null);
+    setBackendDatabase(normalizeDatabaseKind(result.database));
     setPendingCount(result.pending);
     setSyncError(result.error);
     if (result.online && result.error) window.dispatchEvent(new Event('online'));
   }
 
+  const handleLogout = () => { logout(); setIdentity(null); setAuthRequired(true); };
+
   return (
     <BrowserRouter>
-      {authRequired ? <AuthenticationGate onSuccess={() => { window.dispatchEvent(new Event('online')); }} onLogout={logout} /> : backendState === 'checking' ? <div className="welcome-screen"><section className="welcome-card"><div className="eyebrow">WORKSPACE</div><h1>Connecting to ReqTrace…</h1><p>Checking authentication and project storage.</p></section></div> : !currentProject ? (
-        <ProjectWelcome onCreate={createProject} workspaces={workspaces} onCreateWorkspace={createWorkspace} />
+      {authRequired ? <AuthenticationGate onSuccess={() => { window.dispatchEvent(new Event('online')); }} onLogout={handleLogout} /> : backendState === 'checking' ? <div className="welcome-screen"><section className="welcome-card"><div className="eyebrow">WORKSPACE</div><h1>Connecting to ReqTrace…</h1><p>Checking authentication and project storage.</p></section></div> : !currentProject ? (
+        <Routes><Route path="/account" element={<AccountSecurityPage identity={identity} onLogout={handleLogout} />} /><Route path="*" element={<ProjectWelcome onCreate={createProject} workspaces={workspaces} onCreateWorkspace={createWorkspace} identity={identity} />} /></Routes>
       ) : (
         <Workspace
           projects={projects}
@@ -292,6 +308,8 @@ function App() {
           backendDatabase={backendDatabase}
           pendingCount={pendingCount}
           syncError={syncError}
+          identity={identity}
+          onLogout={handleLogout}
           requirements={requirements.filter((item) => item.projectId === currentProject.id)}
           createRequirement={createRequirement}
           updateRequirement={updateRequirement}
@@ -311,6 +329,11 @@ function AuthenticationGate({ onSuccess, onLogout }: { onSuccess: () => void; on
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [recovery, setRecovery] = useState(false);
+  const [resetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') ?? '');
+  const [resetCompleted, setResetCompleted] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [notice, setNotice] = useState('');
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true); setError('');
@@ -318,11 +341,13 @@ function AuthenticationGate({ onSuccess, onLogout }: { onSuccess: () => void; on
     catch (e) { onLogout(); setError(e instanceof Error ? e.message : 'Sign-in failed. Check the server and credentials.'); }
     finally { setBusy(false); }
   };
+  const submitRecovery = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(''); try { const result = await requestPasswordReset(email); setNotice(result.message); } catch (e) { setError(e instanceof Error ? e.message : 'Password recovery is unavailable.'); } finally { setBusy(false); } };
+  const submitReset = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(''); try { await completePasswordReset(resetToken, newPassword); setNotice('Password changed. Sign in with your new password.'); setNewPassword(''); setResetCompleted(true); window.history.replaceState({}, '', window.location.pathname); } catch (e) { setError(e instanceof Error ? e.message : 'This reset link is invalid or expired.'); } finally { setBusy(false); } };
   return <div className="welcome-screen"><section className="welcome-card auth-card">
     <div className="brand-lockup welcome-brand"><span className="brand-mark"><GitBranch size={19} /></span><span className="brand-name">reqtrace<span className="brand-period">.</span></span></div>
     <div className="eyebrow"><ShieldCheck size={13} /> AUTHENTICATED WORKSPACE</div><h1>Sign in to ReqTrace</h1>
     <p>Your server administrator provides the account for this workspace.</p>
-    <form className="auth-form" onSubmit={submit}><label>Email<input type="email" autoComplete="username" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete="current-password" required maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error && <div className="sync-alert" role="alert">{error}</div>}<button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}<ArrowRight size={14} /></button></form>
+     {resetToken && !resetCompleted ? <form className="auth-form" onSubmit={submitReset}><label>New password<input type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>{error && <div className="sync-alert" role="alert">{error}</div>}<button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Reset password'}<ArrowRight size={14} /></button></form> : recovery ? <form className="auth-form" onSubmit={submitRecovery}><label>Email<input type="email" autoComplete="username" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label>{notice && <div className="success-note" role="status">{notice}</div>}{error && <div className="sync-alert" role="alert">{error}</div>}<button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}<ArrowRight size={14} /></button><button type="button" className="text-button" onClick={() => { setRecovery(false); setNotice(''); setError(''); }}>Back to sign in</button></form> : <form className="auth-form" onSubmit={submit}>{notice && <div className="success-note" role="status">{notice}</div>}<label>Email<input type="email" autoComplete="username" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete="current-password" required maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} /></label>{error && <div className="sync-alert" role="alert">{error}</div>}<button className="button button-primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}<ArrowRight size={14} /></button><button type="button" className="text-button" onClick={() => { setRecovery(true); setNotice(''); setError(''); }}>Forgot your password?</button></form>}
     <div className="welcome-foot"><ShieldCheck size={14} /> Session token stays in this browser tab and expires automatically.</div>
   </section></div>;
 }
@@ -343,6 +368,8 @@ interface WorkspaceProps {
   backendDatabase: DatabaseKind;
   pendingCount: number;
   syncError: string | null;
+  identity: AuthIdentity | null;
+  onLogout: () => void;
   requirements: Requirement[];
   createRequirement: (record: Omit<Requirement, 'id' | 'code' | 'projectId' | 'createdAt' | 'status'>) => void;
   updateRequirement: (id: string, updates: Partial<Requirement>) => void;
@@ -363,7 +390,7 @@ function Workspace(props: WorkspaceProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [projectMenu, setProjectMenu] = useState(false);
-  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/projects' ? 'Projects' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/knowledge-graph' ? 'Knowledge graph' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/project' ? 'Project settings' : 'Not found';
+  const pageTitle = location.pathname === '/' ? 'Overview' : location.pathname === '/projects' ? 'Projects' : location.pathname === '/new-project' ? 'Create project' : location.pathname === '/requirements' ? 'Requirements' : location.pathname === '/traceability' ? 'Traceability' : location.pathname === '/knowledge-graph' ? 'Knowledge graph' : location.pathname === '/tests' ? 'Test cases' : location.pathname === '/defects' ? 'Defects' : location.pathname === '/ai' ? 'AI intelligence' : location.pathname === '/assistant' ? 'AI assistant' : location.pathname === '/github' ? 'GitHub integration' : location.pathname === '/reports' ? 'Reports & analytics' : location.pathname === '/automation' ? 'Automation' : location.pathname === '/intake' ? 'Add requirements' : location.pathname === '/documents' ? 'Source documents' : location.pathname === '/activity' ? 'Project activity' : location.pathname === '/project' ? 'Project settings' : location.pathname === '/account' ? 'Account & security' : 'Not found';
   const counts = props.requirements.filter((item) => item.status === 'Draft' || item.status === 'Under review').length;
 
   return (
@@ -376,7 +403,7 @@ function Workspace(props: WorkspaceProps) {
         <div className="sidebar-caption">WORKSPACE</div>
         <button className="project-selector" onClick={() => setProjectMenu((open) => !open)}>
           <span className="project-avatar">{props.project.key.slice(0, 2)}</span>
-          <span className="project-selector-copy"><b>{props.project.name}</b><small>{props.project.key} · {props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database' : 'Local database' : 'browser cache'}</small></span>
+          <span className="project-selector-copy"><b>{props.project.name}</b><small>{props.project.key} · {props.backendState === 'online' ? databaseLabel(props.backendDatabase) : 'browser cache'}</small></span>
           <ChevronDown size={15} className="muted-icon" />
         </button>
         {projectMenu && <div className="project-menu">
@@ -391,6 +418,8 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/" end aria-label="Overview" title="Overview" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Layers3 size={17} /><span>Overview</span></NavLink>
           <NavLink to="/projects" aria-label="Projects" title="Projects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><FolderKanban size={17} /><span>Projects</span></NavLink>
           <NavLink to="/requirements" aria-label="Requirements" title="Requirements" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ClipboardCheck size={17} /><span>Requirements</span>{counts > 0 && <em>{counts}</em>}</NavLink>
+          <NavLink to="/documents" aria-label="Source documents" title="Source documents" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><FileText size={17} /><span>Documents</span></NavLink>
+          <NavLink to="/activity" aria-label="Project activity" title="Project activity" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><History size={17} /><span>Activity</span></NavLink>
           <NavLink to="/ai" aria-label="AI intelligence" title="AI intelligence" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Sparkles size={17} /><span>AI intelligence</span></NavLink>
           <NavLink to="/assistant" aria-label="AI assistant" title="AI assistant" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><MessageSquareText size={17} /><span>AI assistant</span></NavLink>
           <NavLink to="/github" aria-label="GitHub integration" title="GitHub integration" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Github size={17} /><span>GitHub</span></NavLink>
@@ -402,6 +431,7 @@ function Workspace(props: WorkspaceProps) {
           <NavLink to="/defects" aria-label="Defects" title="Defects" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><CircleHelp size={17} /><span>Defects</span></NavLink>
           <NavLink to="/intake" aria-label="Intake" title="Intake" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Inbox size={17} /><span>Intake</span></NavLink>
           <NavLink to="/project" aria-label="Project settings" title="Project settings" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><Settings2 size={17} /><span>Project settings</span></NavLink>
+          {props.identity?.authenticated && <NavLink to="/account" aria-label="Account and security" title="Account and security" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}><ShieldCheck size={17} /><span>Account & security</span></NavLink>}
         </nav>
 
         <div className="sidebar-bottom">
@@ -410,14 +440,14 @@ function Workspace(props: WorkspaceProps) {
             <div><b>Phase 1 · Intake</b><small>Draft review and approval</small></div>
             <span className="phase-indicator" />
           </div>
-          <div className="sidebar-footer"><span className="local-dot" /> {props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database + browser cache' : 'Local database + browser cache' : 'Browser cache'} <button title="The local Python API persists workspace data; the browser cache keeps the UI available while it is offline"><CircleHelp size={14} /></button></div>
+          <div className="sidebar-footer"><span className="local-dot" /> {props.backendState === 'online' ? `${databaseLabel(props.backendDatabase)} + browser cache` : 'Browser cache'} <button title="The configured backend persists workspace data; a per-account browser cache keeps the UI available while it is offline"><CircleHelp size={14} /></button></div>
         </div>
       </aside>
 
       <main className="main-panel">
         <header className="topbar">
           <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-slash">/</span><b>{pageTitle}</b></div>
-          <div className="topbar-right"><span className="local-badge"><span className="local-dot" />{props.backendState === 'checking' ? 'Checking storage' : props.backendState === 'online' ? props.backendDatabase === 'oracle' ? 'Oracle database' : 'Local database' : props.pendingCount ? `Browser cache · ${props.pendingCount} pending` : 'Browser cache'}</span>{hasAuthSession() ? <button className="avatar-button auth-signout" title="Sign out" aria-label="Sign out" onClick={() => { logout(); window.dispatchEvent(new Event('reqtrace:auth-required')); }}><LogOut size={15} /></button> : <button className="avatar-button" title="Local workspace">{props.project.key.slice(0, 1)}</button>}</div>
+          <div className="topbar-right"><span className="local-badge"><span className="local-dot" />{props.backendState === 'checking' ? 'Checking storage' : props.backendState === 'online' ? databaseLabel(props.backendDatabase) : props.pendingCount ? `Browser cache · ${props.pendingCount} pending` : 'Browser cache'}</span>{hasAuthSession() ? <button className="avatar-button auth-signout" title="Sign out" aria-label="Sign out" onClick={() => { logout(); window.dispatchEvent(new Event('reqtrace:auth-required')); }}><LogOut size={15} /></button> : <button className="avatar-button" title="Local workspace">{props.project.key.slice(0, 1)}</button>}</div>
         </header>
         {props.syncError && <div className="sync-alert" role="status"><span><b>Storage needs attention</b>{props.syncError}</span><small>{props.pendingCount} pending change{props.pendingCount === 1 ? '' : 's'}</small></div>}
         <div className="page-content">
@@ -435,7 +465,10 @@ function Workspace(props: WorkspaceProps) {
             <Route path="/tests" element={<TestCasesPage project={props.project} requirements={props.requirements} />} />
             <Route path="/defects" element={<DefectsPage project={props.project} requirements={props.requirements} />} />
             <Route path="/intake" element={<IntakePage project={props.project} createRequirement={props.createRequirement} />} />
+            <Route path="/documents" element={<DocumentsPage project={props.project} />} />
+            <Route path="/activity" element={<ProjectActivityPage project={props.project} />} />
             <Route path="/project" element={<ProjectSettings project={props.project} />} />
+            <Route path="/account" element={<AccountSecurityPage identity={props.identity} onLogout={props.onLogout} />} />
             <Route path="/new-project" element={<NewProjectPage onCreate={(record) => { props.onCreateProject(record); navigate('/'); }} workspaces={props.workspaces} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
@@ -445,7 +478,7 @@ function Workspace(props: WorkspaceProps) {
   );
 }
 
-function ProjectWelcome({ onCreate, workspaces, onCreateWorkspace }: { onCreate: WorkspaceProps['onCreateProject']; workspaces: WorkspaceRecord[]; onCreateWorkspace: WorkspaceProps['onCreateWorkspace'] }) {
+function ProjectWelcome({ onCreate, workspaces, onCreateWorkspace, identity }: { onCreate: WorkspaceProps['onCreateProject']; workspaces: WorkspaceRecord[]; onCreateWorkspace: WorkspaceProps['onCreateWorkspace']; identity: AuthIdentity | null }) {
   return <div className="welcome-screen"><div className="welcome-card">
     <div className="brand-lockup welcome-brand"><span className="brand-mark"><GitBranch size={19} /></span><span className="brand-name">reqtrace<span className="brand-period">.</span></span></div>
     <div className="eyebrow"><span className="local-dot" /> START WITH A PROJECT</div>
@@ -454,6 +487,7 @@ function ProjectWelcome({ onCreate, workspaces, onCreateWorkspace }: { onCreate:
     <NewProjectForm onCreate={onCreate} primaryLabel="Create project" workspaces={workspaces} />
     <CreateWorkspaceForm onCreate={onCreateWorkspace} />
     <div className="welcome-foot"><ShieldCheck size={14} /> Your project is kept in the browser until the local API is available to persist it.</div>
+     {identity?.authenticated && <Link className="text-button" to="/account">Account & security settings<ArrowRight size={14} /></Link>}
   </div></div>;
 }
 
@@ -641,6 +675,60 @@ function IntakePage({ project, createRequirement }: { project: Project; createRe
     </section>
     {documents.length > 0 && <section className="surface source-document-library"><div className="section-heading"><div><span className="eyebrow">PROJECT SOURCES</span><h2>Saved source documents</h2></div></div>{documents.map((document) => <details className="requirement-version" key={document.id}><summary><b>{document.filename}</b><span>{document.extractionMethod}</span><small>{dateLabel(document.createdAt)} · {document.candidateStatements.length} candidate statements</small></summary><pre>{document.extractedText.slice(0, 12000)}{document.extractedText.length > 12000 ? '\n… preview truncated' : ''}</pre></details>)}</section>}
     <div className="intake-footnote"><ShieldCheck size={14} /> Source text, extraction results, and linked requirements are stored in the configured project database.</div>
+  </div>;
+}
+
+function DocumentsPage({ project }: { project: Project }) {
+  const [documents, setDocuments] = useState<SourceDocumentRecord[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const refresh = async () => {
+    setLoading(true);
+    try { setDocuments(await getProjectDocuments(project.id)); setError(''); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Source documents could not be loaded.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void refresh(); }, [project.id]);
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await extractProjectDocument(project.id, file);
+      setNotice(`${file.name} was extracted and saved to this project.`);
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : 'The document could not be extracted.'); }
+    finally { setBusy(false); if (fileInput.current) fileInput.current.value = ''; }
+  };
+  return <div className="narrow-page"><div className="eyebrow"><FileText size={13} /> PROJECT LIBRARY · {project.key}</div><h1 className="page-heading">Source documents</h1><p className="page-subheading">Keep extracted source text and candidate requirement statements attached to the project.</p>
+    {notice && <div className="success-note" role="status">{notice}</div>}{error && <div className="sync-alert" role="alert">{error}</div>}
+    <section className="surface form-surface document-library-upload"><div className="section-heading"><div><span className="eyebrow">ADD A SOURCE</span><h2>Extract a document</h2></div></div><p>PDF, DOCX, TXT, MD, and CSV files up to 10 MB are extracted by the backend and saved with this project.</p><input ref={fileInput} type="file" accept=".pdf,.docx,.txt,.md,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv" onChange={(event) => { void upload(event.target.files?.[0]); }} /><button className="button button-primary" type="button" disabled={busy} onClick={() => fileInput.current?.click()}><Upload size={15} />{busy ? 'Extracting…' : 'Choose document'}</button></section>
+    <section className="surface source-document-library"><div className="section-heading"><div><span className="eyebrow">SAVED SOURCES</span><h2>{documents.length} document{documents.length === 1 ? '' : 's'}</h2></div><button className="button button-secondary button-small" onClick={() => void refresh()} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button></div>
+      {loading ? <div className="loading-state">Loading project documents…</div> : documents.length ? documents.map((document) => <details className="requirement-version" key={document.id}><summary><b>{document.filename}</b><span>{document.extractionMethod}</span><small>{dateLabel(document.createdAt)} · {Math.ceil(document.byteSize / 1024)} KB · {document.candidateStatements.length} candidates</small></summary><div className="document-candidate-list">{document.candidateStatements.length ? <><b>Candidate statements</b>{document.candidateStatements.slice(0, 20).map((candidate, index) => <p key={`${document.id}-${index}`}>{candidate}</p>)}<Link className="text-button" to="/intake">Review and capture a requirement<ArrowRight size={14} /></Link></> : <small>No candidate statements were detected in this source.</small>}<details><summary>Extracted text</summary><pre>{document.extractedText.slice(0, 20000)}{document.extractedText.length > 20000 ? '\n… preview truncated' : ''}</pre></details></div></details>) : <EmptyState icon={<FileText size={18} />} title="No source documents yet" text="Upload a specification or stakeholder document to create a searchable source record." action="Add document" onAction={() => fileInput.current?.click()} />}
+    </section>
+  </div>;
+}
+
+function ProjectActivityPage({ project }: { project: Project }) {
+  const [events, setEvents] = useState<AuditRecord[]>([]);
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const refresh = async () => { setLoading(true); try { setEvents(await getProjectAudit(project.id)); setError(''); } catch (e) { setError(e instanceof Error ? e.message : 'Project activity could not be loaded.'); } finally { setLoading(false); } };
+  useEffect(() => { void refresh(); }, [project.id]);
+  const filtered = events.filter((event) => `${event.action} ${event.detail} ${event.actorUserId ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+  const exportCsv = () => {
+    const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const rows = [['date', 'action', 'actor', 'requirement', 'detail'], ...filtered.map((event) => [event.createdAt, event.action, event.actorUserId ?? 'system', event.requirementId ?? '', event.detail])];
+    const blob = new Blob([rows.map((row) => row.map(quote).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${project.key.toLowerCase()}-activity.csv`; anchor.click(); URL.revokeObjectURL(url);
+  };
+  return <div className="narrow-page"><div className="eyebrow"><History size={13} /> AUDIT TRAIL · {project.key}</div><h1 className="page-heading">Project activity</h1><p className="page-subheading">Review persisted changes and their actor attribution for this project.</p>{error && <div className="sync-alert" role="alert">{error}</div>}
+    <section className="surface activity-library"><div className="records-controls"><label className="search-field"><Search size={15} /><input aria-label="Search project activity" placeholder="Search actions, actors, details" value={query} onChange={(event) => setQuery(event.target.value)} /></label><button className="button button-secondary button-small" onClick={() => void refresh()} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button><button className="button button-secondary button-small" onClick={exportCsv} disabled={!filtered.length}>Export CSV</button></div>
+      {loading ? <div className="loading-state">Loading project activity…</div> : filtered.length ? <div className="activity-timeline">{filtered.map((event) => <article className="activity-row" key={event.id}><span className="local-dot" /><div><b>{event.action.replaceAll('_', ' ')}</b><small>{dateLabel(event.createdAt)} · actor {event.actorUserId ?? 'system'}{event.requirementId ? ` · ${event.requirementId}` : ''}</small><p>{event.detail}</p></div></article>)}</div> : <EmptyState icon={<History size={18} />} title={events.length ? 'No matching activity' : 'No activity recorded'} text={events.length ? 'Adjust the search to find another event.' : 'Requirement, project, and team changes will appear here.'} />}
+    </section>
   </div>;
 }
 
@@ -836,6 +924,98 @@ function RequirementEditor({ requirement, onClose, onSave, onDelete }: { require
     </div>
     {!locked && <div className="drawer-footer">{requirement.status === 'Draft' ? <><button className="button button-secondary" onClick={save}>Save draft</button><button className="button button-primary" onClick={submitForReview}>Submit for review<ArrowRight size={14} /></button></> : <><button className="button button-secondary" onClick={reject}>Reject</button><button className="button button-secondary" onClick={save}>Save changes</button><button className="button button-primary" onClick={approve}><Check size={15} /> Approve</button></>}</div>}
   </aside></div>;
+}
+
+function AccountSecurityPage({ identity, onLogout }: { identity: AuthIdentity | null; onLogout: () => void }) {
+  const [accounts, setAccounts] = useState<UserAccountRecord[]>([]);
+  const [events, setEvents] = useState<AccountSecurityEventRecord[]>([]);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'Admin' | 'Editor' | 'Viewer'>('Viewer');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const isAdmin = identity?.authenticated && identity.role === 'Admin';
+
+  const refreshAccounts = async () => {
+    if (!isAdmin) return;
+    try {
+      const [nextAccounts, nextEvents] = await Promise.all([getUserAccounts(), getAccountSecurityAudit()]);
+      setAccounts(nextAccounts);
+      setEvents(nextEvents);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Account data could not be loaded.');
+    }
+  };
+  useEffect(() => { void refreshAccounts(); }, [isAdmin]);
+
+  const createAccount = async (event: FormEvent) => {
+    event.preventDefault(); setError(''); setNotice(''); setBusy(true);
+    try {
+      await createUserAccount(email, password, role);
+      setEmail(''); setPassword(''); setRole('Viewer'); setNotice('Account created. Share the initial password through your approved secure channel.');
+      await refreshAccounts();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Account could not be created.'); }
+    finally { setBusy(false); }
+  };
+
+  const saveAccount = async (account: UserAccountRecord, changes: { role?: 'Admin' | 'Editor' | 'Viewer'; active?: boolean }) => {
+    setError(''); setNotice('');
+    if (changes.active === false && !window.confirm(`Deactivate ${account.email}? Their active sessions will stop working immediately.`)) return;
+    try {
+      await updateUserAccount(account.id, changes);
+      setNotice('Account updated. Any active sessions were revoked.');
+      if (account.id === identity?.id) onLogout();
+      else await refreshAccounts();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Account could not be updated.'); }
+  };
+
+  const changePassword = async (event: FormEvent) => {
+    event.preventDefault(); setError(''); setNotice(''); setBusy(true);
+    try {
+      await changeAccountPassword(currentPassword, newPassword);
+      setNotice('Password changed. Sign in again with the new password.');
+      setCurrentPassword(''); setNewPassword(''); onLogout();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Password could not be changed.'); }
+    finally { setBusy(false); }
+  };
+
+  return <div className="narrow-page account-security-page">
+    <div className="eyebrow"><ShieldCheck size={13} /> ACCOUNT</div>
+    <h1 className="page-heading">Account & security</h1>
+    <p className="page-subheading">{identity?.email ?? 'Manage your sign-in and access.'} · {identity?.role ?? 'Local workspace'}</p>
+    {error && <div className="sync-alert" role="alert">{error}</div>}
+    {notice && <div className="success-note" role="status">{notice}</div>}
+    {identity?.authenticated && <section className="surface settings-card">
+      <div className="section-heading"><div><span className="eyebrow">SIGN-IN</span><h2>Change password</h2></div></div>
+      <form className="form-stack" onSubmit={changePassword}>
+        <label>Current password<input type="password" autoComplete="current-password" required maxLength={256} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} /></label>
+        <label>New password<input type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /><small>Use at least 12 characters. Changing it signs out existing sessions.</small></label>
+        <button className="button button-primary" disabled={busy}>{busy ? 'Updating…' : 'Change password'}</button>
+      </form>
+    </section>}
+    {isAdmin && <>
+      <section className="surface settings-card">
+        <div className="section-heading"><div><span className="eyebrow">ADMINISTRATION</span><h2>User accounts</h2></div><span className="phase-pill">{accounts.length} accounts</span></div>
+        <form className="form-stack" onSubmit={createAccount}>
+          <div className="field-grid"><label>Email<input type="email" autoComplete="off" required maxLength={320} value={email} onChange={(e) => setEmail(e.target.value)} /></label><label>Initial password<input type="password" autoComplete="new-password" required minLength={12} maxLength={256} value={password} onChange={(e) => setPassword(e.target.value)} /></label></div>
+          <div className="field-grid"><label>Global role<select value={role} onChange={(e) => setRole(e.target.value as typeof role)}><option>Viewer</option><option>Editor</option><option>Admin</option></select></label><button className="button button-secondary" disabled={busy}>Create account</button></div>
+        </form>
+        <div className="account-list">{accounts.map((account) => <div className="account-row" key={account.id}>
+          <div className="account-copy"><b>{account.email}</b><small>{account.id === identity?.id ? 'Current account' : account.id}</small></div>
+          <select aria-label={`Role for ${account.email}`} value={account.role} onChange={(e) => void saveAccount(account, { role: e.target.value as 'Admin' | 'Editor' | 'Viewer' })}><option>Viewer</option><option>Editor</option><option>Admin</option></select>
+          <span className={`account-status${account.active ? ' active' : ''}`}>{account.active ? 'Active' : 'Inactive'}</span>
+          {account.id !== identity?.id && <button className="button button-secondary button-small" onClick={() => void saveAccount(account, { active: !account.active })}>{account.active ? 'Deactivate' : 'Reactivate'}</button>}
+        </div>)}</div>
+      </section>
+      <section className="surface settings-card">
+        <div className="section-heading"><div><span className="eyebrow">AUDIT</span><h2>Account security events</h2></div></div>
+        {events.length ? events.slice(0, 20).map((item) => <div className="activity-row" key={item.id}><span className="local-dot" /><div><b>{item.action.replaceAll('_', ' ')}</b><small>{dateLabel(item.createdAt)} · actor {item.actorUserId ?? 'system'}{item.subjectUserId ? ` · account ${item.subjectUserId}` : ''}</small></div></div>) : <EmptyState icon={<ShieldCheck size={18} />} title="No account events yet" text="Account changes and password recovery events will be recorded here." />}
+      </section>
+    </>}
+  </div>;
 }
 
 function ProjectSettings({ project }: { project: Project }) {

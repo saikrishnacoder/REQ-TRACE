@@ -139,6 +139,7 @@ class AuditEvent(Base):
     id: Mapped[str] = mapped_column("EVENT_ID", String(36), primary_key=True)
     project_id: Mapped[str] = mapped_column("PROJECT_ID", String(36), ForeignKey("RT_PROJECTS.PROJECT_ID", ondelete="CASCADE"), nullable=False)
     requirement_id: Mapped[str | None] = mapped_column("REQUIREMENT_ID", String(36), ForeignKey("RT_REQUIREMENTS.REQUIREMENT_ID", ondelete="SET NULL"), nullable=True)
+    actor_user_id: Mapped[str | None] = mapped_column("ACTOR_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
     action: Mapped[str] = mapped_column("ACTION", String(40), nullable=False)
     detail: Mapped[str] = mapped_column("DETAIL", Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
@@ -356,6 +357,35 @@ class UserAccount(Base):
     password_hash: Mapped[str] = mapped_column("PASSWORD_HASH", String(256), nullable=False)
     role: Mapped[str] = mapped_column("ROLE", String(16), nullable=False, default="Viewer")
     active: Mapped[bool] = mapped_column("ACTIVE", Boolean, nullable=False, default=True)
+    token_version: Mapped[int] = mapped_column("TOKEN_VERSION", Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class AccountSecurityEvent(Base):
+    __tablename__ = "RT_ACCOUNT_SECURITY_EVENTS"
+    __table_args__ = (Index("IX_RT_ACCOUNT_EVENT_CREATED", "CREATED_AT"),)
+
+    id: Mapped[str] = mapped_column("EVENT_ID", String(36), primary_key=True)
+    actor_user_id: Mapped[str | None] = mapped_column("ACTOR_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
+    subject_user_id: Mapped[str | None] = mapped_column("SUBJECT_USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="SET NULL"), nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column("WORKSPACE_ID", String(36), ForeignKey("RT_WORKSPACES.WORKSPACE_ID", ondelete="SET NULL"), nullable=True)
+    action: Mapped[str] = mapped_column("ACTION", String(80), nullable=False)
+    detail: Mapped[str] = mapped_column("DETAIL", Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "RT_PASSWORD_RESET_TOKENS"
+    __table_args__ = (
+        UniqueConstraint("TOKEN_DIGEST", name="UQ_RT_RESET_TOKEN_DIGEST"),
+        Index("IX_RT_RESET_USER_EXPIRES", "USER_ID", "EXPIRES_AT"),
+    )
+
+    id: Mapped[str] = mapped_column("RESET_ID", String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column("USER_ID", String(36), ForeignKey("RT_USERS.USER_ID", ondelete="CASCADE"), nullable=False)
+    token_digest: Mapped[str] = mapped_column("TOKEN_DIGEST", String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column("EXPIRES_AT", TIMESTAMP(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column("USED_AT", TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column("CREATED_AT", TIMESTAMP(timezone=True), nullable=False, server_default=func.current_timestamp())
 
 

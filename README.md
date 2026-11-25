@@ -56,14 +56,32 @@ scope projects and their records. Workspace owners/admins manage team membership
 workspace editors create and update projects and requirements; only workspace
 owners/admins approve/reject requirements, archive projects, and delete
 records. System admins retain global administration. Non-admin project lists
-are restricted to workspace or explicit project membership. Global account
-lifecycle UI, password reset, distributed rate limiting, and organization
-tenancy remain incomplete. Existing API tokens now honor account deactivation
-and role changes immediately. For a separate frontend origin, configure
-`CORS_ALLOWED_ORIGINS` in the backend and `VITE_API_URL` at frontend build
-time. **Do not expose this API or a database-backed mode on a shared network.**
+are restricted to workspace membership. Password change and one-time email
+recovery, account event audit, and Redis-backed shared rate limits are included.
+See [the authorization matrix](SECURITY_AUTHORIZATION.md) for route policies.
+Existing tokens honor account deactivation and role changes immediately.
+**Do not expose this API on a shared network without the public deployment
+settings below.**
 Oracle mode reads persisted server records and does not automatically import
 projects or queued changes from the browser cache.
 AI and GitHub credentials belong only in the backend environment; never put
 them in frontend configuration or source control. Database adapter support does
 not by itself provide a production-ready team service.
+
+## Vercel deployment
+
+Deploy the frontend and API as separate Vercel projects. The frontend uses this
+repository root, builds with `npm run build`, and includes an SPA fallback in
+`vercel.json`. Set `VITE_API_URL` to the backend origin ending in `/api/v1`, then
+redeploy the frontend. Set the backend project Root Directory to `backend`;
+`index.py` exports the FastAPI app. Configure hosted PostgreSQL and the public
+deployment variables documented in `backend/.env.example`. On Vercel, SQLite
+is temporary and health reports `storage: ephemeral`; PostgreSQL or Oracle is
+required for persistence. Startup runs forward-only Alembic migrations before
+serving. Public startup fails closed unless authentication, exact HTTPS CORS,
+TLS Redis, and TLS SMTP recovery are configured. Use a TLS PostgreSQL URL such
+as `postgresql+psycopg://…?sslmode=require`. Bootstrap credentials never reset
+an existing account and can be removed after the first admin is provisioned.
+
+See [Vercel Python Functions](https://vercel.com/docs/functions/runtimes/python)
+and [FastAPI on Vercel](https://vercel.com/docs/frameworks/backend/fastapi).

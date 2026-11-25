@@ -1,9 +1,26 @@
 # ReqTrace AI technical audit and implementation report
 
-Audit refreshed: 2026-11-24. This report reflects the current repository, not
+Audit refreshed: 2026-11-25. This report reflects the current repository, not
 the original baseline. Feature claims below are limited to checked-in source
 and automated checks. External providers and a clean-machine install have not
 been verified unless explicitly stated.
+
+## Security and hosting refresh (2026-11-25)
+
+The former security/deployment gaps listed below are superseded for the local
+codebase: workspace membership is the tenant boundary; account lifecycle now
+includes password change, one-time password recovery, audit attribution, and
+token revocation; public deployments require HTTPS origins, explicit CORS,
+TLS Postgres/Redis/SMTP, and shared rate limiting. Public startup runs forward
+Alembic migrations under a PostgreSQL advisory lock. Vercel now has an explicit
+backend entrypoint, an SPA fallback, `NullPool`, and `storage: ephemeral` for
+SQLite. Dedicated Documents and Activity screens call the persisted API.
+
+Validation added with this refresh includes a registered-route auth sweep,
+workspace boundary and recovery flows, serverless storage/config tests, and
+front-end production build. A live Vercel deployment, database provider, SMTP,
+Redis, and browser E2E run have not been executed; deployment still requires
+provider credentials and configured secrets.
 
 ## Architecture
 
@@ -21,7 +38,7 @@ been verified unless explicitly stated.
 
 | Module | Current implementation | Verified status / remaining work |
 |---|---|---|
-| Navigation and routes | Overview, projects, requirements, intake, project settings/access, traceability, tests, defects, AI, assistant, GitHub, reports, automation, and not-found route | Routes are implemented in `src/App.tsx`; automated browser route/form coverage is absent. Authentication appears as a sign-in gate rather than a URL route; global account lifecycle has no dedicated page. |
+| Navigation and routes | Overview, projects, requirements, intake, documents, activity, project settings/access, traceability, tests, defects, AI, assistant, GitHub, reports, automation, account/security, and not-found route | Routes are implemented in `src/App.tsx`; API-backed Documents and Activity pages were added in the 2026-11-25 refresh. Automated browser route/form coverage is still absent. |
 | Dashboard | Project and requirement KPIs, test/run/defect metrics, status distribution, recent audit activity, refresh | Uses persisted API data. Date filters, trend charts, and a richer activity feed remain open. |
 | Requirements | Ten categories, eight states, description/statement, owner, verification method, tags, version number/history, approval lifecycle, source extraction/provenance, search/filter/sort/pagination, configurable columns, inline priority/status edit, generalized bulk update/delete, CSV import/export, comments, R-R links | SQLite API behavior, version/audit writes, source extraction, bulk transactions, and workspace access are tested. OCR and Excel/PDF exports remain open. Uploaded binary data is discarded after supported text extraction; extracted text is persisted. |
 | Projects and workspaces | Project CRUD, archive/restore/duplicate, category/owner/team/status/priority/dates/objectives, workspace membership and role boundaries | API CRUD and member isolation are tested. Project owner/team controls and broader workspace management UI remain limited; routes and data model are available. |
@@ -33,11 +50,11 @@ been verified unless explicitly stated.
 | Assistant | Project-scoped stored conversations, retrieval from project records, cited sources, local fallback | API tests cover fallback/history/scoping. Live AI calls, streaming, regenerate, copy, and richer context selection are unverified or absent. |
 | Reports | Persisted requirement, test execution, and defect views; CSV export | CSV path is implemented. PDF/XLSX, AI analysis report, filters, and scheduled reports remain open. |
 | Automation | Enable/disable and manually run three read-only quality rules with stored results | API behavior tested. Schedules, notifications, actor permissions, and background triggers remain open. |
-| Database and migrations | Workspaces/memberships, project lifecycle metadata, requirement detail/tags/version number, foreign keys and indexes, forward revision `20261124_0014`, SQLite/PostgreSQL/Oracle adapters | SQLite migration upgrades and preservation tests pass; PostgreSQL offline generation command completes, but the legacy bootstrap/offline path does not emit the new revision DDL. Apply upgrades online with `python -m app.init_db`. Live PostgreSQL/Oracle upgrades and backup/restore remain unverified. The historical bootstrap still creates current ORM metadata for a fresh online database; use the new revisions to upgrade existing installations. |
+| Database and migrations | Workspaces/memberships, project lifecycle metadata, requirement detail/tags/version number, security account events/token versions, forward revisions through `20261125_0015`, SQLite/PostgreSQL/Oracle adapters | SQLite migration upgrades and preservation tests pass; application startup migrates all database modes and serializes PostgreSQL cold starts. Live PostgreSQL/Oracle upgrades and backup/restore remain unverified. |
 | UI/UX | Dark navy/violet styling, responsive breakpoints, shared controls, empty/error states, sidebar and breadcrumb | Desktop build passes. Formal accessibility, keyboard/focus behavior, visual browser checks at target breakpoints, and reusable toast/skeleton/tooltip components remain incomplete. |
-| Security | Loopback sidecar default, server-side secrets, input schemas, signed-token auth, workspace Owner/Admin/Editor/Viewer roles, explicit project-member access, per-request current-account validation, configurable CORS, audit events | Workspace owner/admin manages team members, project archive/restore/delete, and approval/rejection/verification; Editors create and update; Viewers read only. System Admin has global access. Tests cover workspace isolation and Viewer write rejection. Password reset, distributed rate limiting, organization tenancy, external identity lifecycle, full security review, and deployment hardening remain open. **Do not expose the API or database service publicly.** Document extraction has bounded input and persists text/provenance; binaries are discarded. Local browser/SQLite data is not encrypted. |
+| Security | Loopback sidecar default, server-side secrets, input schemas, signed-token auth, workspace Owner/Admin/Editor/Viewer roles, per-request token-version validation, route coverage, account recovery, configurable CORS, actor-attributed audit | Workspace isolation and route-by-route unauthenticated rejection are tested. Redis provides shared public rate limits; public config fails closed on missing HTTPS origins, TLS database, Redis, or email recovery. Live deployment/infra verification remains open. Local browser/SQLite data is not encrypted. |
 | Performance and operations | Project-scoped APIs and persistent local storage | Some routes load complete project collections; large-scale pagination/index review, structured logs, request IDs, and operational monitoring remain open. |
-| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | 29 backend tests pass after Phase 01; `tsc --noEmit` and Vite production build pass. PostgreSQL Alembic offline SQL compilation passes without duplicate table creation. The 2026-11-20 audit recorded zero production npm vulnerabilities and a manual route smoke check. One Starlette/httpx deprecation warning remains. No repeat desktop packaging after the current changes, frontend automated E2E suite, live PostgreSQL server test, or clean-machine installer verification. |
+| Automated quality | Backend pytest suite, TypeScript check, desktop installer build and sidecar smoke test | Latest complete run: 47 backend tests, TypeScript check, and Vite production build pass. PostgreSQL Alembic offline SQL generation is covered. One Starlette/httpx deprecation warning remains. No live hosted services, repeat desktop packaging, frontend E2E suite, or clean-machine installer verification. |
 
 ## Route inventory
 
@@ -48,6 +65,8 @@ been verified unless explicitly stated.
 | `/projects` lifecycle controls | Rename, duplicate, archive/restore, delete; workspace creation and selection for new projects |
 | `/requirements` | Search, status/priority filters, sort, page, configurable columns, inline status/priority, import/export, bulk priority/status/owner/tags/delete, edit/review/history/comments |
 | `/intake` | Manual, conversation, PDF/DOCX/TXT/MD/CSV extraction, candidate selection, and source-linked requirement creation |
+| `/documents` | Project source library, document extraction, candidate statements, and extracted text |
+| `/activity` | Searchable actor-attributed project audit with CSV export |
 | `/project` | Active project details |
 | `/traceability` | Requirement, test, run, defect, and GitHub reference matrix |
 | `/knowledge-graph` | Interactive persisted-record graph for requirements, tests, defects, and GitHub references; search, entity filter, zoom, selection, and details |

@@ -1,8 +1,11 @@
 import base64
+import hashlib
 import io
 import json
 import hmac
 import re
+import secrets
+import smtplib
 import time
 import uuid
 import zipfile
@@ -10,7 +13,9 @@ from xml.etree import ElementTree
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest, urlopen
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,15 +23,34 @@ from fastapi.responses import JSONResponse
 from pathlib import Path
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.auth import decode_token, hash_password, issue_token, verify_password
 from app.database import SessionLocal, engine, get_db
-from app.models import AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, Project, ProjectMembership, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SourceDocument, SyncOutboxEvent, TestCase, TestExecution, UserAccount, Workspace, WorkspaceMembership
-from app.schemas import AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, DocumentExtractRequest, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, ProjectCreate, ProjectMemberCreate, ProjectMemberRead, ProjectRead, ProjectUpdate, WorkspaceCreate, WorkspaceMemberCreate, WorkspaceMemberRead, WorkspaceRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementBulkDelete, RequirementBulkUpdate, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, SourceDocumentRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
+from app.models import AccountSecurityEvent, AuditEvent, AutomationRule, AutomationRun, Conversation, ConversationMessage, Defect, GitHubLink, GitHubRecord, GitHubRepository, PasswordResetToken, Project, ProjectMembership, Requirement, RequirementAnalysis, RequirementComment, RequirementLink, RequirementVersion, SourceDocument, SyncOutboxEvent, TestCase, TestExecution, UserAccount, Workspace, WorkspaceMembership
+from app.rate_limit import RateLimitUnavailable, consume_rate_limit
+from app.schemas import AccountSecurityEventRead, AssistantMessageCreate, AssistantReply, AuditEventRead, AutomationRuleRead, AutomationRuleUpdate, AutomationRunRead, ConversationMessageRead, ConversationRead, DefectCreate, DefectRead, DefectUpdate, DocumentExtractRequest, GitHubLinkCreate, GitHubLinkRead, GitHubRecordRead, GitHubRepositoryRead, GitHubRepositorySelect, LoginRequest, LoginResponse, PasswordChangeRequest, PasswordResetComplete, PasswordResetRequest, ProjectCreate, ProjectMemberCreate, ProjectMemberRead, ProjectRead, ProjectUpdate, WorkspaceCreate, WorkspaceMemberCreate, WorkspaceMemberRead, WorkspaceRead, RequirementAnalysisRead, RequirementAnalysisResult, RequirementBulkDelete, RequirementBulkUpdate, RequirementCommentCreate, RequirementCommentRead, RequirementCreate, RequirementLinkCreate, RequirementLinkRead, RequirementRead, RequirementUpdate, RequirementVersionRead, SourceDocumentRead, TestCaseCreate, TestCaseRead, TestCaseSuggestion, TestCaseSuggestionsRead, TestExecutionCreate, TestExecutionRead, TraceabilityRead, UserAccountCreate, UserAccountRead, UserAccountUpdate
+
+
+def upgrade_schema() -> None:
+    """Apply forward migrations, serializing concurrent PostgreSQL cold starts."""
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+    if engine.dialect.name != "postgresql":
+        command.upgrade(config, "head")
+        return
+    lock_id = 762914330154
+    with engine.connect() as lock_connection:
+        lock_connection.execute(text("SELECT pg_advisory_lock(CAST(:lock_id AS BIGINT))"), {"lock_id": lock_id})
+        lock_connection.commit()
+        try:
+            command.upgrade(config, "head")
+        finally:
+            lock_connection.execute(text("SELECT pg_advisory_unlock(CAST(:lock_id AS BIGINT))"), {"lock_id": lock_id})
+            lock_connection.commit()
 
 
 def authorize_project_access(request: Request, db: Session = Depends(get_db)) -> None:
@@ -36,8 +60,8 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
     if claims.get("role") == "Admin":
         return
     path = request.url.path.removeprefix("/api/v1/").strip("/").split("/")
-    if path[:2] == ["auth", "users"]:
-        raise HTTPException(status_code=403, detail="Only administrators can manage user accounts")
+    if path[:2] == ["auth", "users"] or path[:2] == ["auth", "audit"]:
+        raise HTTPException(status_code=403, detail="Only administrators can manage accounts and security events")
     if path and path[0] == "github" and len(path) > 1 and path[1] == "repositories":
         raise HTTPException(status_code=403, detail="Only administrators can browse available GitHub repositories")
 
@@ -87,7 +111,12 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
         ProjectMembership.project_id == project_id,
         ProjectMembership.user_id == claims.get("sub"),
     ))
-    if workspace_membership is None and project_membership is None:
+    # A workspace-backed project belongs to exactly one tenant. Legacy
+    # project-only memberships may not bypass that workspace boundary.
+    if project is not None and project.workspace_id:
+        if workspace_membership is None:
+            raise HTTPException(status_code=403, detail="You do not have access to this workspace")
+    elif project_membership is None:
         raise HTTPException(status_code=403, detail="You do not have access to this project")
     if request.method not in {"GET", "HEAD"} and (
         (workspace_membership is not None and workspace_membership.role == "Viewer")
@@ -108,31 +137,36 @@ def authorize_project_access(request: Request, db: Session = Depends(get_db)) ->
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings.validate_deployment_security()
     if settings.local_api_token:
         if len(settings.local_api_token) < 32:
             raise RuntimeError("REQTRACE_LOCAL_API_TOKEN must contain at least 32 characters")
         if settings.api_host not in {"127.0.0.1", "localhost", "::1"}:
             raise RuntimeError("A desktop sidecar with local API authentication must bind to loopback")
-    # A desktop install must be usable immediately and persist records locally.
-    # Server deployments use the same schema but are initialized explicitly.
+    # Every runtime must have the current forward-only schema before serving.
     try:
-        if settings.database_mode.casefold() == "local":
-            config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-            command.upgrade(config, "head")
+        upgrade_schema()
         if settings.authentication_enabled:
             if len(settings.auth_token_secret) < 32 or "replace-with" in settings.auth_token_secret.casefold():
                 raise RuntimeError("AUTH_TOKEN_SECRET must contain at least 32 characters when authentication is enabled")
+            if settings.is_public_deployment:
+                from redis.asyncio import Redis
+                _app.state.rate_limit_store = Redis.from_url(settings.rate_limit_redis_url, decode_responses=False, socket_connect_timeout=3, socket_timeout=3)
+                await _app.state.rate_limit_store.ping()
             seed_initial_admin()
         yield
     finally:
+        store = getattr(_app.state, "rate_limit_store", None)
+        if store is not None:
+            await store.aclose()
         engine.dispose()
 
 
 app = FastAPI(
     title="ReqTrace API",
     version="0.2.0",
-    docs_url="/api/docs",
-    openapi_url="/api/openapi.json",
+    docs_url=None if settings.is_public_deployment else "/api/docs",
+    openapi_url=None if settings.is_public_deployment else "/api/openapi.json",
     lifespan=lifespan,
     dependencies=[Depends(authorize_project_access)],
 )
@@ -144,9 +178,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-ReqTrace-Local-Token"],
 )
 
-_rate_windows: dict[tuple[str, str], tuple[float, int]] = {}
-
-
 @app.middleware("http")
 async def authenticate_api(request: Request, call_next):
     if request.method == "OPTIONS":
@@ -155,30 +186,49 @@ async def authenticate_api(request: Request, call_next):
         supplied_token = request.headers.get("X-ReqTrace-Local-Token", "")
         if not hmac.compare_digest(supplied_token, settings.local_api_token):
             return JSONResponse(status_code=401, content={"detail": "A valid local application token is required"})
+    if settings.is_public_deployment and request.url.scheme != "https":
+        return JSONResponse(status_code=400, content={"detail": "HTTPS is required for public API requests"})
+    if settings.is_public_deployment and settings.public_api_origin:
+        expected_host = urlsplit(settings.public_api_origin).netloc.casefold()
+        actual_host = request.url.netloc.casefold()
+        if not expected_host or actual_host != expected_host:
+            return JSONResponse(status_code=421, content={"detail": "This API host is not configured"})
     if not settings.authentication_enabled or request.method == "OPTIONS" or request.url.path in {
         "/api/v1/health", "/api/docs", "/api/openapi.json", "/docs/oauth2-redirect",
     }:
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.path.startswith("/api/v1/auth/"):
+            response.headers["Cache-Control"] = "no-store"
+        if settings.is_public_deployment:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
     if len(settings.auth_token_secret) < 32:
         return JSONResponse(status_code=503, content={"detail": "Authentication is not configured"})
     client_ip = request.client.host if request.client else "unknown"
-    login_route = request.url.path == "/api/v1/auth/login"
-    bucket = (client_ip, "login" if login_route else "api")
-    now = time.monotonic()
-    if len(_rate_windows) > 10_000:
-        for old_bucket, (old_started, _) in list(_rate_windows.items()):
-            if now - old_started >= 300:
-                del _rate_windows[old_bucket]
-    window_seconds, maximum = (300.0, 5) if login_route else (60.0, 300)
-    started, count = _rate_windows.get(bucket, (now, 0))
-    if now - started >= window_seconds:
-        started, count = now, 0
-    if count >= maximum:
-        retry_after = max(1, int(window_seconds - (now - started)))
+    sensitive_auth_route = request.url.path in {
+        "/api/v1/auth/login", "/api/v1/auth/password-reset-requests", "/api/v1/auth/password-resets",
+    }
+    window_seconds, maximum = (300, 10) if sensitive_auth_route else (60, 1200)
+    rate_secret = settings.auth_token_secret or settings.local_api_token or "local-development-rate-limit"
+    fingerprint = hmac.new(rate_secret.encode("utf-8"), f"{client_ip}:{request.url.path if sensitive_auth_route else 'api-ip'}".encode("utf-8"), hashlib.sha256).hexdigest()
+    try:
+        allowed, retry_after = await consume_rate_limit(f"reqtrace:{'auth' if sensitive_auth_route else 'api-ip'}:{fingerprint}", maximum, window_seconds, getattr(request.app.state, "rate_limit_store", None))
+    except RateLimitUnavailable:
+        if settings.is_public_deployment:
+            return JSONResponse(status_code=503, content={"detail": "Request protection is temporarily unavailable"})
+        allowed, retry_after = await consume_rate_limit(f"dev:{fingerprint}", maximum, window_seconds)
+    if not allowed:
         return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again later."}, headers={"Retry-After": str(retry_after)})
-    _rate_windows[bucket] = (started, count + 1)
-    if login_route:
-        return await call_next(request)
+    if sensitive_auth_route:
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if settings.is_public_deployment:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
     claims = decode_token(token, settings.auth_token_secret) if scheme.casefold() == "bearer" else None
@@ -190,18 +240,35 @@ async def authenticate_api(request: Request, call_next):
     try:
         with request.app.state.session_factory() as db:
             account = db.get(UserAccount, claims.get("sub"))
-            if account is None or not account.active:
+            if account is None or not account.active or claims.get("ver") != account.token_version:
                 return JSONResponse(status_code=401, content={"detail": "The account is inactive or no longer exists"}, headers={"WWW-Authenticate": "Bearer"})
             claims = {**claims, "email": account.email, "role": account.role}
     except SQLAlchemyError:
         return JSONResponse(status_code=503, content={"detail": "Authentication could not be verified"})
+    user_fingerprint = hmac.new(rate_secret.encode("utf-8"), f"user:{claims.get('sub')}".encode("utf-8"), hashlib.sha256).hexdigest()
+    try:
+        allowed, retry_after = await consume_rate_limit(
+            f"reqtrace:user:{user_fingerprint}", 300, 60,
+            getattr(request.app.state, "rate_limit_store", None),
+        )
+    except RateLimitUnavailable:
+        if settings.is_public_deployment:
+            return JSONResponse(status_code=503, content={"detail": "Request protection is temporarily unavailable"})
+        allowed, retry_after = await consume_rate_limit(f"dev-user:{user_fingerprint}", 300, 60)
+    if not allowed:
+        return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again later."}, headers={"Retry-After": str(retry_after)})
     role = claims["role"]
     if request.url.path.startswith("/api/v1/auth/users") and role != "Admin":
         return JSONResponse(status_code=403, content={"detail": "Only administrators can manage user accounts"})
     if request.method not in {"GET", "HEAD"} and role == "Viewer":
         return JSONResponse(status_code=403, content={"detail": "Viewer role cannot modify project data"})
     request.state.user = claims
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if settings.is_public_deployment:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 
 def seed_initial_admin() -> None:
@@ -209,6 +276,8 @@ def seed_initial_admin() -> None:
     with SessionLocal() as db:
         existing = db.scalar(select(UserAccount).limit(1))
         if existing is not None:
+            # Ignore bootstrap values after the first account exists. This keeps
+            # serverless cold starts safe when multiple instances share Postgres.
             return
         email = settings.auth_bootstrap_email.strip().casefold()
         password = settings.auth_bootstrap_password
@@ -216,6 +285,58 @@ def seed_initial_admin() -> None:
             raise RuntimeError("Set AUTH_BOOTSTRAP_EMAIL and a 12+ character AUTH_BOOTSTRAP_PASSWORD to initialize the first admin")
         db.add(UserAccount(id=str(uuid.uuid4()), email=email, password_hash=hash_password(password), role="Admin", active=True))
         db.commit()
+
+
+def append_security_event(
+    db: Session,
+    action: str,
+    actor_user_id: str | None,
+    subject_user_id: str | None = None,
+    workspace_id: str | None = None,
+    detail: dict | None = None,
+) -> None:
+    db.add(AccountSecurityEvent(
+        id=str(uuid.uuid4()), actor_user_id=actor_user_id,
+        subject_user_id=subject_user_id, workspace_id=workspace_id,
+        action=action, detail=json.dumps(detail or {}, ensure_ascii=False),
+    ))
+
+
+def send_password_reset_email(recipient: str, reset_url: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = "Reset your ReqTrace password"
+    message["From"] = settings.smtp_from
+    message["To"] = recipient
+    message.set_content(
+        "A password reset was requested for your ReqTrace account. "
+        "Open the link below within 30 minutes. If you did not request this, ignore this message.\n\n"
+        f"{reset_url}\n"
+    )
+    if settings.smtp_use_ssl:
+        server_context = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10)
+    else:
+        server_context = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10)
+    with server_context as server:
+        if settings.smtp_starttls and not settings.smtp_use_ssl:
+            server.starttls()
+        if settings.smtp_username:
+            server.login(settings.smtp_username, settings.smtp_password)
+        server.send_message(message)
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+@app.get("/api/v1/auth/audit", response_model=list[AccountSecurityEventRead])
+def list_account_security_events(db: Session = Depends(get_db)):
+    events = db.scalars(select(AccountSecurityEvent).order_by(AccountSecurityEvent.created_at.desc()).limit(500)).all()
+    return [{
+        "id": event.id, "actor_user_id": event.actor_user_id,
+        "subject_user_id": event.subject_user_id, "workspace_id": event.workspace_id,
+        "action": event.action, "detail": json.loads(event.detail or "{}"),
+        "created_at": event.created_at,
+    } for event in events]
 
 
 @app.post("/api/v1/auth/login", response_model=LoginResponse)
@@ -227,7 +348,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if user is None or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
     ttl = max(5, min(settings.auth_token_ttl_minutes, 24 * 60))
-    token = issue_token(user.id, user.email, user.role, settings.auth_token_secret, ttl)
+    token = issue_token(user.id, user.email, user.role, settings.auth_token_secret, ttl, user.token_version)
     return {"access_token": token, "token_type": "bearer", "expires_in": ttl * 60,
         "user": {"id": user.id, "email": user.email, "role": user.role}}
 
@@ -239,6 +360,79 @@ def current_user(request: Request):
     claims = getattr(request.state, "user", {})
     return {"authenticated": True, "authRequired": True, "id": claims.get("sub"),
         "email": claims.get("email"), "role": claims.get("role")}
+
+
+@app.post("/api/v1/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(payload: PasswordChangeRequest, request: Request, db: Session = Depends(get_db)) -> Response:
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled for this workspace")
+    user_id = request.state.user["sub"]
+    user = db.get(UserAccount, user_id)
+    if user is None or not user.active:
+        raise HTTPException(status_code=401, detail="Account is inactive or no longer exists")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if hmac.compare_digest(payload.current_password, payload.new_password):
+        raise HTTPException(status_code=422, detail="Choose a new password different from the current password")
+    user.password_hash = hash_password(payload.new_password)
+    user.token_version += 1
+    db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
+    append_security_event(db, "password_changed", user.id, user.id)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/api/v1/auth/password-reset-requests", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset(payload: PasswordResetRequest, db: Session = Depends(get_db)):
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled for this workspace")
+    if not settings.smtp_host or not settings.smtp_from or not settings.public_app_origin:
+        raise HTTPException(status_code=503, detail="Password recovery is not configured")
+    generic_response = {"message": "If an active account matches that address, a reset link will be sent."}
+    user = db.scalar(select(UserAccount).where(UserAccount.email == payload.email, UserAccount.active.is_(True)))
+    if user is None:
+        return generic_response
+    now = datetime.now(timezone.utc)
+    db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
+    raw_token = secrets.token_urlsafe(32)
+    reset_token = PasswordResetToken(
+        id=str(uuid.uuid4()), user_id=user.id,
+        token_digest=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+        expires_at=now + timedelta(minutes=30),
+        created_at=now,
+    )
+    db.add(reset_token)
+    append_security_event(db, "password_reset_requested", None, user.id)
+    db.commit()
+    reset_url = f"{settings.public_app_origin.rstrip('/')}/?reset={quote(raw_token)}"
+    try:
+        send_password_reset_email(user.email, reset_url)
+    except (OSError, smtplib.SMTPException):
+        reset_token.used_at = datetime.now(timezone.utc)
+        db.commit()
+        return generic_response
+    return generic_response
+
+
+@app.post("/api/v1/auth/password-resets", status_code=status.HTTP_204_NO_CONTENT)
+def complete_password_reset(payload: PasswordResetComplete, db: Session = Depends(get_db)) -> Response:
+    if not settings.authentication_enabled:
+        raise HTTPException(status_code=404, detail="Authentication is not enabled for this workspace")
+    digest = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    reset_token = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_digest == digest).with_for_update())
+    now = datetime.now(timezone.utc)
+    if reset_token is None or reset_token.used_at is not None or _utc(reset_token.expires_at) <= now:
+        raise HTTPException(status_code=400, detail="This password reset link is invalid or has expired")
+    user = db.get(UserAccount, reset_token.user_id)
+    if user is None or not user.active:
+        raise HTTPException(status_code=400, detail="This password reset link is invalid or has expired")
+    reset_token.used_at = now
+    user.password_hash = hash_password(payload.new_password)
+    user.token_version += 1
+    db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.id != reset_token.id))
+    append_security_event(db, "password_reset_completed", user.id, user.id)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/api/v1/auth/users", response_model=list[UserAccountRead])
@@ -255,6 +449,7 @@ def create_user(payload: UserAccountCreate, db: Session = Depends(get_db)):
     user = UserAccount(id=str(uuid.uuid4()), email=payload.email, password_hash=hash_password(payload.password),
         role=payload.role, active=True)
     db.add(user)
+    append_security_event(db, "account_created", db.info.get("actor_user_id"), user.id, detail={"role": user.role})
     try:
         db.commit()
         db.refresh(user)
@@ -281,8 +476,12 @@ def update_user(user_id: str, payload: UserAccountUpdate, request: Request, db: 
         active_admins = db.scalar(select(func.count()).select_from(UserAccount).where(UserAccount.role == "Admin", UserAccount.active.is_(True))) or 0
         if active_admins <= 1:
             raise HTTPException(status_code=409, detail="At least one active administrator must remain")
+    changed = any(getattr(user, field) != value for field, value in changes.items())
     for field, value in changes.items():
         setattr(user, field, value)
+    if changed:
+        user.token_version += 1
+        append_security_event(db, "account_updated", request.state.user.get("sub"), user.id, detail=changes)
     db.commit()
     db.refresh(user)
     return user
@@ -293,6 +492,7 @@ def append_audit(db: Session, project_id: str, action: str, requirement_id: str 
         id=str(uuid.uuid4()),
         project_id=project_id,
         requirement_id=requirement_id,
+        actor_user_id=db.info.get("actor_user_id"),
         action=action,
         detail=json.dumps(detail or {}, ensure_ascii=False),
     ))
@@ -319,7 +519,7 @@ def health(response: Response, db: Session = Depends(get_db)):
             "status": "ok",
             "database": database,
             "mode": settings.database_mode,
-            "storage": "persistent",
+            "storage": settings.storage_kind,
             "local_auth": bool(settings.local_api_token),
         }
     except SQLAlchemyError as exc:
@@ -389,8 +589,9 @@ def list_workspace_members(workspace_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/workspaces/{workspace_id}/members", response_model=WorkspaceMemberRead, status_code=status.HTTP_201_CREATED)
-def add_workspace_member(workspace_id: str, payload: WorkspaceMemberCreate, db: Session = Depends(get_db)):
-    if db.get(Workspace, workspace_id) is None:
+def add_workspace_member(workspace_id: str, payload: WorkspaceMemberCreate, request: Request, db: Session = Depends(get_db)):
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     user = db.get(UserAccount, payload.user_id)
     if user is None or not user.active:
@@ -398,11 +599,23 @@ def add_workspace_member(workspace_id: str, payload: WorkspaceMemberCreate, db: 
     if user.role == "Viewer" and payload.role != "Viewer":
         raise HTTPException(status_code=422, detail="A global Viewer account cannot receive a workspace write role")
     membership = _workspace_membership(db, workspace_id, payload.user_id)
+    if payload.role == "Owner" and workspace.owner_user_id and workspace.owner_user_id != user.id:
+        if request.state.user.get("role") != "Admin" and workspace.owner_user_id != request.state.user.get("sub"):
+            raise HTTPException(status_code=403, detail="Only the current workspace owner or a system administrator can transfer ownership")
+        current_owner_membership = _workspace_membership(db, workspace_id, workspace.owner_user_id)
+        if current_owner_membership is not None:
+            current_owner_membership.role = "Admin"
+        workspace.owner_user_id = user.id
+    elif membership and membership.role == "Owner" and payload.role != "Owner" and workspace.owner_user_id == user.id:
+        raise HTTPException(status_code=409, detail="Transfer workspace ownership before changing the owner's role")
+    if payload.role == "Owner":
+        workspace.owner_user_id = user.id
     if membership:
         membership.role = payload.role
     else:
         membership = WorkspaceMembership(id=str(uuid.uuid4()), workspace_id=workspace_id, user_id=payload.user_id, role=payload.role)
         db.add(membership)
+    append_security_event(db, "workspace_member_updated", db.info.get("actor_user_id"), user.id, workspace_id, {"role": payload.role})
     db.commit()
     db.refresh(membership)
     return membership
@@ -413,8 +626,18 @@ def remove_workspace_member(workspace_id: str, user_id: str, db: Session = Depen
     membership = _workspace_membership(db, workspace_id, user_id)
     if membership is None:
         raise HTTPException(status_code=404, detail="Workspace membership not found")
-    if membership.role == "Owner":
+    workspace = db.get(Workspace, workspace_id)
+    if membership.role == "Owner" or (workspace is not None and workspace.owner_user_id == user_id):
         raise HTTPException(status_code=409, detail="Transfer workspace ownership before removing the owner")
+    project_memberships = db.scalars(select(ProjectMembership).join(Project).where(
+        ProjectMembership.user_id == user_id, Project.workspace_id == workspace_id,
+    )).all()
+    for project_membership in project_memberships:
+        append_audit(db, project_membership.project_id, "project_member_removed", detail={
+            "userId": user_id, "role": project_membership.role, "workspaceRemoval": True,
+        })
+        db.delete(project_membership)
+    append_security_event(db, "workspace_member_removed", db.info.get("actor_user_id"), user_id, workspace_id, {"role": membership.role})
     db.delete(membership)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -425,7 +648,9 @@ def list_projects(request: Request, db: Session = Depends(get_db)):
     query = select(Project).where(Project.deleted_at.is_(None)).order_by(Project.created_at.desc())
     claims = getattr(request.state, "user", {})
     if settings.authentication_enabled and claims.get("role") != "Admin":
-        project_ids = select(ProjectMembership.project_id).where(ProjectMembership.user_id == claims.get("sub"))
+        project_ids = select(ProjectMembership.project_id).join(Project).where(
+            ProjectMembership.user_id == claims.get("sub"), Project.workspace_id.is_(None),
+        )
         workspace_ids = select(WorkspaceMembership.workspace_id).where(WorkspaceMembership.user_id == claims.get("sub"))
         query = query.where((Project.id.in_(project_ids)) | (Project.workspace_id.in_(workspace_ids)))
     return list(db.scalars(query).all())
@@ -448,7 +673,7 @@ def create_project(payload: ProjectCreate, response: Response, request: Request,
             project_access = db.scalar(select(ProjectMembership.id).where(
                 ProjectMembership.project_id == existing.id, ProjectMembership.user_id == claims.get("sub"),
             ))
-            if workspace_access is None and project_access is None:
+            if (existing.workspace_id and workspace_access is None) or (not existing.workspace_id and project_access is None):
                 raise HTTPException(status_code=403, detail="You do not have access to this project")
         return existing
     claims = getattr(request.state, "user", {})
@@ -473,8 +698,10 @@ def create_project(payload: ProjectCreate, response: Response, request: Request,
         membership = _workspace_membership(db, workspace.id, claims.get("sub", ""))
         if membership is None or membership.role == "Viewer":
             raise HTTPException(status_code=403, detail="You need Editor access in the selected workspace to create a project")
-    if payload.owner_user_id and _workspace_membership(db, workspace.id, payload.owner_user_id) is None:
-        raise HTTPException(status_code=422, detail="Project owner must be an active member of its workspace")
+    if payload.owner_user_id:
+        owner = db.get(UserAccount, payload.owner_user_id)
+        if owner is None or not owner.active or _workspace_membership(db, workspace.id, payload.owner_user_id) is None:
+            raise HTTPException(status_code=422, detail="Project owner must be an active member of its workspace")
     created_at = datetime.now(timezone.utc)
     project = Project(
         id=payload.id or str(uuid.uuid4()),
@@ -516,8 +743,10 @@ def update_project(project_id: str, payload: ProjectUpdate, db: Session = Depend
     if project is None or project.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Project not found")
     updates = payload.model_dump(exclude_unset=True)
-    if updates.get("owner_user_id") and _workspace_membership(db, project.workspace_id or "", updates["owner_user_id"]) is None:
-        raise HTTPException(status_code=422, detail="Project owner must be a workspace member")
+    if updates.get("owner_user_id"):
+        owner = db.get(UserAccount, updates["owner_user_id"])
+        if owner is None or not owner.active or _workspace_membership(db, project.workspace_id or "", updates["owner_user_id"]) is None:
+            raise HTTPException(status_code=422, detail="Project owner must be an active workspace member")
     for field, value in updates.items():
         if value is not None or field in {"owner_user_id", "start_date", "target_date"}:
             setattr(project, field, value.strip() if isinstance(value, str) else value)
@@ -659,11 +888,14 @@ def list_project_members(project_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/projects/{project_id}/members", response_model=ProjectMemberRead, status_code=status.HTTP_201_CREATED)
 def add_project_member(project_id: str, payload: ProjectMemberCreate, db: Session = Depends(get_db)):
-    if db.get(Project, project_id) is None:
+    project = db.get(Project, project_id)
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     user = db.get(UserAccount, payload.user_id)
     if user is None or not user.active:
         raise HTTPException(status_code=404, detail="Active user account not found")
+    if project.workspace_id and _workspace_membership(db, project.workspace_id, user.id) is None:
+        raise HTTPException(status_code=422, detail="Project members must first belong to the project's workspace")
     if user.role == "Viewer" and payload.role == "Editor":
         raise HTTPException(status_code=422, detail="A global Viewer account cannot be assigned as a project Editor")
     membership = db.scalar(select(ProjectMembership).where(
@@ -1783,12 +2015,13 @@ def list_requirement_comments(requirement_id: str, db: Session = Depends(get_db)
 
 
 @app.post("/api/v1/requirements/{requirement_id}/comments", response_model=RequirementCommentRead, status_code=status.HTTP_201_CREATED)
-def create_requirement_comment(requirement_id: str, payload: RequirementCommentCreate, db: Session = Depends(get_db)):
+def create_requirement_comment(requirement_id: str, payload: RequirementCommentCreate, request: Request, db: Session = Depends(get_db)):
     requirement = db.get(Requirement, requirement_id)
     if requirement is None or requirement.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Active requirement not found")
+    author = getattr(request.state, "user", {}).get("email") if settings.authentication_enabled else payload.author.strip()
     comment = RequirementComment(id=str(uuid.uuid4()), project_id=requirement.project_id,
-        requirement_id=requirement.id, author=payload.author.strip(), content=payload.content.strip(),
+        requirement_id=requirement.id, author=(author or "Authenticated user"), content=payload.content.strip(),
         created_at=datetime.now(timezone.utc))
     if not comment.author or not comment.content:
         raise HTTPException(status_code=422, detail="Comment author and content cannot be blank")

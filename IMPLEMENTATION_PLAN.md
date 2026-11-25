@@ -1,10 +1,10 @@
 # ReqTrace AI implementation plan
 
 This plan follows the user's attached ReqTrace requirements specification and
-the shared **Complete Project Setup Guide** conversation. The shared guide's
-PostgreSQL choice is superseded as the shared-database target by the user's
-Oracle requirement. Phase 01 also configures a PostgreSQL adapter through
-psycopg 3. Its offline +
+the shared **Complete Project Setup Guide** conversation. The user's later
+Vercel deployment direction selects hosted PostgreSQL for the shared service;
+Oracle remains a supported alternate adapter. Phase 01 configures PostgreSQL
+through psycopg 3. Its offline +
 team operation, desktop-first interface, staged delivery, and separation of
 local and shared storage remain the product direction.
 
@@ -14,9 +14,9 @@ local and shared storage remain the product direction.
 - **Local API:** Python + FastAPI sidecar bound to loopback.
 - **Offline data:** SQLite under the user's application data directory; the
   browser keeps a recovery cache and retry queue.
-- **Shared data:** Oracle Database through the same API contract on a separate
-  authenticated team service. Desktop clients will sync through that API; they
-  will never connect directly to the shared database.
+- **Shared data:** Hosted PostgreSQL through the same API contract on an
+  authenticated service. Oracle remains supported as an alternate enterprise
+  adapter. Desktop clients use the API and never connect directly to the DB.
 - **AI and analysis:** add only after source handling, permissions, persistence,
   and evidence trails are in place.
 
@@ -34,6 +34,20 @@ local and shared storage remain the product direction.
    and confirmed voice actions.
 6. **Release:** packaged Python sidecar, Tauri installer, upgrade-safe local
    migrations, backup and restore, and clean-machine verification.
+
+## Security and hosted deployment update (2026-11-25)
+
+The service now has workspace tenant scoping, a registered-route authorization
+test, account password change and recovery, revocable sessions, actor-attributed
+audit events, and Redis-backed shared rate limits. Public deployment checks
+require TLS PostgreSQL/Oracle, HTTPS origins, exact CORS origins, TLS Redis, and
+TLS email recovery. Alembic migrations run at app startup and PostgreSQL cold
+starts serialize through an advisory lock. Vercel uses `backend/index.py` and
+the repository-root SPA rewrite; SQLite is reported ephemeral there. Dedicated
+Documents and Activity screens now use the real persistent APIs.
+
+The live deployment remains unverified until a Vercel project, persistent
+database, Redis, SMTP credentials, and environment secrets are configured.
 
 ## Current build boundary
 

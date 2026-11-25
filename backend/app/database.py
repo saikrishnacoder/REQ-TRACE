@@ -1,5 +1,7 @@
 from sqlalchemy import URL, create_engine, make_url
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from fastapi import Request
 
 from app.config import settings
 
@@ -20,7 +22,9 @@ class Base(DeclarativeBase):
 
 
 engine_options = {"pool_pre_ping": True}
-if database_name.get_backend_name() == "sqlite":
+if settings.is_serverless:
+    engine_options["poolclass"] = NullPool
+elif database_name.get_backend_name() == "sqlite":
     engine_options["connect_args"] = {"check_same_thread": False}
 else:
     engine_options["pool_recycle"] = 1800
@@ -29,8 +33,11 @@ engine = create_engine(database_name, **engine_options)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def get_db():
+def get_db(request: Request):
     session = SessionLocal()
+    identity = getattr(request.state, "user", None)
+    if identity:
+        session.info["actor_user_id"] = identity.get("sub")
     try:
         yield session
     finally:

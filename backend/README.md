@@ -10,7 +10,7 @@ known limitations.
 
 `DATABASE_MODE=local` is the default. On Windows, the API stores SQLite at
 `%LOCALAPPDATA%\ReqTrace\data\reqtrace.db`; set `REQTRACE_DATA_DIR` to move
-the data directory. Local startup applies pending Alembic migrations. The
+the data directory. Startup applies pending Alembic migrations in all modes. The
 browser also retains a recovery cache and retry outbox for API interruptions.
 
 ## Install and run locally
@@ -62,9 +62,11 @@ Set `DATABASE_MODE=postgresql` and configure `POSTGRES_USER`,
 Alternatively, set `DATABASE_URL` to a SQLAlchemy URL using the explicit
 `postgresql+psycopg://` driver. PostgreSQL mode requires bearer authentication
 by default; configure `AUTH_TOKEN_SECRET`, `AUTH_BOOTSTRAP_EMAIL`, and
-`AUTH_BOOTSTRAP_PASSWORD` before starting the API. Apply schema migrations with
-`python -m app.init_db` after the database is reachable. Health checks execute a
-database query and return HTTP 503 if the configured database cannot be used.
+`AUTH_BOOTSTRAP_PASSWORD` before starting the API. The first startup provisions
+an admin, and each startup applies pending schema migrations. Health checks
+execute a database query and return HTTP 503 if the database cannot be used.
+Serverless SQLite is temporary and reports `storage: ephemeral`; use hosted
+PostgreSQL for durable server data.
 
 PostgreSQL adapter configuration and SQL DDL compilation are covered by local
 tests. A live PostgreSQL server migration has not been verified here.
@@ -94,16 +96,21 @@ status and role are checked on each request, so deactivation and role changes
 apply to existing tokens immediately.
 
 For a separately hosted frontend, set `CORS_ALLOWED_ORIGINS` to a JSON array
-containing only exact trusted HTTPS frontend origins, for example
-`["https://reqtrace.example.com"]`. Set the matching frontend build variable
-`VITE_API_URL` to the API base URL ending in `/api/v1`. Keep both services on
-HTTPS and require authentication; local mode is unauthenticated by default.
+containing only exact trusted HTTPS frontend origins. Set the frontend build
+variable `VITE_API_URL` to the API base URL ending in `/api/v1`. A public
+deployment requires `PUBLIC_API_ORIGIN`, `PUBLIC_APP_ORIGIN`, an
+`AUTH_TOKEN_SECRET` of at least 32 characters, TLS PostgreSQL, a `rediss://`
+`RATE_LIMIT_REDIS_URL`, and TLS SMTP (`SMTP_HOST`, `SMTP_FROM`, plus STARTTLS or
+SSL). HTTPS is required for every request. Public startup fails closed when a
+control is missing.
 
 Admins can list accounts, create users with one of the three roles, and
-deactivate accounts via `/api/v1/auth/users`. The login endpoint permits five
-attempts per five-minute in-process window; other authenticated API traffic is
-limited to 300 requests/minute per process. These in-memory limits do not
-coordinate across multiple workers or instances.
+deactivate accounts via `/api/v1/auth/users`. Users can change their password
+and request one-time email reset links; tokens are hashed, expire, and revoke
+sessions. Login and reset requests share ten attempts per five minutes per IP.
+Redis coordinates limits across instances; an unavailable limiter fails closed
+on public deployments. Authenticated API traffic is also limited per user and
+per IP.
 
 Workspace membership is managed through `/api/v1/workspaces/{workspace_id}/members`.
 Workspace Owner/Admin roles manage active team members as Admins, Editors, or
@@ -122,17 +129,13 @@ bulk changes/deletes, audit events, version snapshots, and sync outbox events
 commit in one database transaction. Bulk operations are exposed at
 `/projects/{project_id}/requirements/bulk` and `.../bulk-delete`.
 
-This remains an initial authentication foundation, not a complete shared-
-service security boundary. Organization tenancy, password reset, distributed
-rate limiting, CSRF controls, and deployment hardening remain incomplete. **Do not
-bind the API to a public or
-shared network.** Keep `.env` out of source control and use a secret manager
-for any future deployment. The app has no file-upload endpoint; document
-intake records a reference and user-entered text only.
+Workspace tenant boundaries, actor-attributed audit, account recovery, and
+shared rate limits are included. Keep `.env` out of source control and put
+secrets in the platform secret manager. Document extraction accepts bounded
+PDF, DOCX, TXT, MD, and CSV content; uploaded binaries are discarded after
+extraction.
 
-Document extraction accepts bounded PDF, DOCX, TXT, MD, and CSV content and
-stores extracted text and provenance in the database. OCR for image-only PDFs
-is not implemented; the uploaded binary itself is not retained.
+OCR for image-only PDFs is not implemented.
 
 The browser does not automatically upload its local cached projects or older
 queued writes when it connects to Oracle. Those records remain on the device;

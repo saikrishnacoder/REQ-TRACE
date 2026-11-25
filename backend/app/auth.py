@@ -28,9 +28,9 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def issue_token(user_id: str, email: str, role: str, secret: str, ttl_minutes: int) -> str:
+def issue_token(user_id: str, email: str, role: str, secret: str, ttl_minutes: int, token_version: int = 1) -> str:
     now = int(time.time())
-    payload = {"sub": user_id, "email": email, "role": role, "iat": now, "exp": now + ttl_minutes * 60}
+    payload = {"sub": user_id, "email": email, "role": role, "ver": token_version, "iat": now, "exp": now + ttl_minutes * 60}
     body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256).digest()
     return f"{body}.{_b64(signature)}"
@@ -45,7 +45,7 @@ def decode_token(token: str, secret: str) -> dict | None:
         payload = json.loads(_unb64(body))
         if not isinstance(payload, dict) or not isinstance(payload.get("exp"), int) or payload["exp"] <= int(time.time()):
             return None
-        if payload.get("role") not in {"Admin", "Editor", "Viewer"} or not payload.get("sub"):
+        if payload.get("role") not in {"Admin", "Editor", "Viewer"} or not payload.get("sub") or not isinstance(payload.get("ver"), int) or payload["ver"] < 1:
             return None
         return payload
     except (ValueError, TypeError, UnicodeDecodeError, binascii.Error):
