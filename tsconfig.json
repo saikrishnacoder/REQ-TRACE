@@ -25,5 +25,5 @@
     "noEmit": true
   },
   "include": ["src", "vite.config.ts"],
-  "exclude": ["node_modules", "dist", "src-tauri", "backend"]
+  "exclude": ["node_modules", "dist", "web_backend/.venv"]
 }

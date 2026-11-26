@@ -1,1 +1,0 @@
-"""ReqTrace API application."""

@@ -1,87 +1,84 @@
-# ReqTrace AI
+# SpecForge AI
 
-ReqTrace AI is an offline-first requirement traceability and software testing
-workspace. The Windows desktop app uses React + TypeScript in Tauri 2 and a
-Python + FastAPI sidecar. The local API persists to SQLite; PostgreSQL and
-Oracle adapters are available through the same SQLAlchemy/Alembic backend.
+SpecForge AI is a browser-based requirements engineering workspace. The
+frontend is React, TypeScript, Vite, Tailwind CSS, React Router and TanStack
+Query. The backend is a Django REST API with Django ORM and MySQL for hosted
+data. SQLite is used only for local development and tests.
 
-Current routes cover workspace/team boundaries, project lifecycle, requirement
-authoring/review/version history, source document extraction, test cases and
-manual runs, defects, AI analysis, grounded project Q&A, read-only GitHub
-imports, traceability and its knowledge graph, reports, and manual quality
-automation. See
-[the audit and status report](AUDIT_REPORT.md) for tested scope and remaining
-work, and [the implementation plan](IMPLEMENTATION_PLAN.md) for architecture.
+The current working slice supports account registration and login, workspace
+creation and membership management, project CRUD and lifecycle controls,
+project activity, and an approval-gated Application Blueprint workflow. The
+blueprint uses approved requirement/design records, validated personas,
+approved business analysis, and explicitly approved SRS documents. Its source
+IDs and document checksums are persisted for traceability. Missing information
+appears as clarification questions; an Owner/Admin cannot approve for
+scaffolding while a question is unresolved.
 
-## Development setup
+Requirement and design authoring/review screens, document ingestion and the
+provider-backed AI analysis of source documents remain planned. The blueprint
+builder is currently deterministic and does not claim that a live AI provider
+analyzed project inputs.
 
-1. Install Node.js/npm, Python 3.13, Rust with the MSVC C++ build tools, and
-   WebView2 for Windows desktop development.
-2. Follow [backend setup](backend/README.md) to create a Python environment.
-3. From the repository root, run `npm install`, then `npm run dev` for the
-   browser preview or `npm run desktop:dev` for Tauri. The desktop command
-   starts the local API, creates a fresh per-run authentication secret, waits
-   for the API health check, and shuts the API down when Tauri exits.
-4. API docs are available at `http://127.0.0.1:8000/api/docs` when running the
-   API manually with `npm run api:dev` or its backend Uvicorn command.
+## Local development
 
-Build the Windows installer with `npm run desktop:build`. This packages the
-Python sidecar with PyInstaller and creates the NSIS installer under
-`src-tauri/target/release/bundle/nsis/`. Local records are kept in
-`%LOCALAPPDATA%\ReqTrace\data` by default.
+1. Install Node.js/npm and Python 3.12. Docker is needed only for local MySQL.
+2. Install the frontend dependencies and start Vite:
 
-## Checks
+   ```powershell
+   npm install
+   npm run dev
+   ```
 
-Run the backend checks from `backend` after installing `requirements-dev.txt`:
+3. In `web_backend`, create a Python environment and install the API
+   dependencies:
+
+   ```powershell
+   py -3.12 -m venv .venv
+   .venv\Scripts\Activate.ps1
+   python -m pip install -r requirements.txt
+   Copy-Item .env.example .env
+   docker compose up -d mysql
+   python manage.py migrate
+   python manage.py runserver 127.0.0.1:9000
+   ```
+
+4. Open the Vite site at `http://127.0.0.1:3000`. Vite proxies `/api/*` to the
+   Django development server. OpenAPI JSON, Swagger UI and ReDoc are at
+   `/api/schema/`, `/api/docs/` and `/api/redoc/` on port 9000.
+
+For SQLite-only development, skip Docker and leave `SPECFORGE_DATABASE_URL`
+unset. Django creates `web_backend/.local.sqlite3`. Production refuses SQLite.
+
+## Configuration and deployment
+
+The frontend uses `VITE_DJANGO_API_URL` for the public API base, ending in
+`/api/v1`. The Django API uses the environment values in
+[`web_backend/.env.example`](web_backend/.env.example). Production requires a
+hosted MySQL database with TLS, a strong Django secret, explicit hostnames, and
+HTTPS CORS/CSRF origins. Never put backend secrets in `VITE_*` variables.
+
+Vercel configuration serves the frontend SPA. Deploy Django separately on a
+Python host with persistent media storage and run migrations as a release step.
+No production MySQL connection has been verified in this environment yet.
+
+## Verification
+
+From the repository root:
 
 ```powershell
-python -m pytest -q tests
-```
-
-Run the frontend type check from the repository root:
-
-```powershell
+npm test
 npm exec tsc -- --noEmit
+npm run build
 ```
 
-## Security and deployment boundary
+From `web_backend`:
 
-The local API defaults to loopback. Tauri desktop sessions generate a random
-256-bit local API token and require it for every request, including health and
-shutdown; it stays in process memory and is never sent to non-loopback URLs.
-PostgreSQL and Oracle modes require signed bearer tokens and apply basic
-Admin/Editor/Viewer write guards; manually started local development mode
-remains unauthenticated by default. Workspace Owner/Admin/Editor/Viewer roles
-scope projects and their records. Workspace owners/admins manage team membership;
-workspace editors create and update projects and requirements; only workspace
-owners/admins approve/reject requirements, archive projects, and delete
-records. System admins retain global administration. Non-admin project lists
-are restricted to workspace membership. Password change and one-time email
-recovery, account event audit, and Redis-backed shared rate limits are included.
-See [the authorization matrix](SECURITY_AUTHORIZATION.md) for route policies.
-Existing tokens honor account deactivation and role changes immediately.
-**Do not expose this API on a shared network without the public deployment
-settings below.**
-Oracle mode reads persisted server records and does not automatically import
-projects or queued changes from the browser cache.
-AI and GitHub credentials belong only in the backend environment; never put
-them in frontend configuration or source control. Database adapter support does
-not by itself provide a production-ready team service.
+```powershell
+python manage.py check
+python manage.py test
+python manage.py spectacular --validate --file schema-openapi.yml
+```
 
-## Vercel deployment
-
-Deploy the frontend and API as separate Vercel projects. The frontend uses this
-repository root, builds with `npm run build`, and includes an SPA fallback in
-`vercel.json`. Set `VITE_API_URL` to the backend origin ending in `/api/v1`, then
-redeploy the frontend. Set the backend project Root Directory to `backend`;
-`index.py` exports the FastAPI app. Configure hosted PostgreSQL and the public
-deployment variables documented in `backend/.env.example`. On Vercel, SQLite
-is temporary and health reports `storage: ephemeral`; PostgreSQL or Oracle is
-required for persistence. Startup runs forward-only Alembic migrations before
-serving. Public startup fails closed unless authentication, exact HTTPS CORS,
-TLS Redis, and TLS SMTP recovery are configured. Use a TLS PostgreSQL URL such
-as `postgresql+psycopg://…?sslmode=require`. Bootstrap credentials never reset
-an existing account and can be removed after the first admin is provisioned.
-
-See [Vercel Python Functions](https://vercel.com/docs/functions/runtimes/python)
-and [FastAPI on Vercel](https://vercel.com/docs/frameworks/backend/fastapi).
+See [AUDIT_REPORT.md](AUDIT_REPORT.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md),
+and [SECURITY_AUTHORIZATION.md](SECURITY_AUTHORIZATION.md) for verified scope,
+planned work, and current access rules.

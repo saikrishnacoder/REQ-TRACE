@@ -1,314 +1,57 @@
-# ReqTrace AI implementation plan
+# SpecForge AI implementation plan
 
-This plan follows the user's attached ReqTrace requirements specification and
-the shared **Complete Project Setup Guide** conversation. The user's later
-Vercel deployment direction selects hosted PostgreSQL for the shared service;
-Oracle remains a supported alternate adapter. Phase 01 configures PostgreSQL
-through psycopg 3. Its offline +
-team operation, desktop-first interface, staged delivery, and separation of
-local and shared storage remain the product direction.
+## Principles
 
-## Target architecture
+- Build one browser-first SpecForge application with React + TypeScript and
+  Django REST Framework.
+- Use persistent MySQL in shared/production environments and migrations for
+  every schema change. SQLite is local/test only.
+- Keep extracted evidence and AI proposals distinguishable from confirmed
+  user input. Approval is required before AI proposals become accepted facts.
+- Add features in reviewable phases; test before moving on and document actual
+  completion rather than model-only progress.
 
-- **Desktop:** Tauri 2 shell around React + TypeScript.
-- **Local API:** Python + FastAPI sidecar bound to loopback.
-- **Offline data:** SQLite under the user's application data directory; the
-  browser keeps a recovery cache and retry queue.
-- **Shared data:** Hosted PostgreSQL through the same API contract on an
-  authenticated service. Oracle remains supported as an alternate enterprise
-  adapter. Desktop clients use the API and never connect directly to the DB.
-- **AI and analysis:** add only after source handling, permissions, persistence,
-  and evidence trails are in place.
+## Phase status and sequence
 
-## Delivery sequence
+1. **Audit:** complete. Repository architecture, dependencies, workflows,
+   deployment, risks, and missing capabilities are in `AUDIT_REPORT.md`.
+2. **Foundation:** implemented. React/TypeScript/Vite/Tailwind, Django/DRF,
+   MySQL adapter, development SQLite, modular domain apps, migrations, health,
+   API errors, OpenAPI, Vite API connection and validation/tests are in place.
+3. **Identity and projects:** core slice implemented. Registration/login/logout,
+   12-hour revocable sessions, profile, workspace membership, project CRUD and
+   lifecycle, and attributed project activity are connected to the `/specforge`
+   portal. Still needed: password recovery, email invitations, shared rate
+   limits, production-grade session storage, broader audit events and richer
+   project forms.
+4. **Application intelligence and planning:** implemented as a deterministic
+   Application Blueprint proposal. It snapshots approved requirement/design
+   inputs (and only explicitly approved SRS documents), produces all requested
+   inventory sections and clarification questions, persists editable drafts,
+   maintains server-managed traceability, and requires Owner/Admin approval
+   after clarifications before scaffolding. It does not call a live AI provider.
+5. **Documents and requirements:** implement file validation/storage,
+   provenance-aware extraction, requirement CRUD, versions, evidence and
+   quality findings. Begin here next; these authoring and approval workflows
+   are needed to supply blueprint inputs in-product.
+6. **Business/audience/design:** add evidence-aware reports, editable personas,
+   design artefacts and renderable diagrams.
+7. **AI orchestration:** configurable providers, structured validation,
+   idempotency, prompts, cost/error tracking and approval-gated proposals.
+8. **Tests/traceability/approvals:** connect approved requirements to suites,
+   executions, defects and evidence; implement coverage, orphan and impact
+   analysis plus approval history.
+9. **Reports and release:** real-data exports, background jobs, production
+   MySQL deployment/backup, security and end-to-end acceptance checks.
 
-1. **Offline foundation:** desktop shell, managed Python startup, SQLite
-   persistence, project creation, requirement intake, review, and audit trail.
-2. **Oracle team service:** Oracle schema migrations, user and organization
-   authentication, role-based access, server API, and authenticated sync.
-3. **Traceability:** immutable approved versions, audit history,
-   requirement-to-test links, and missing-test analysis.
-4. **AI and source intelligence:** document parsing, reviewable extraction,
-   evidence-grounded answers, Python AST indexing, and drift scans.
-5. **Controlled execution:** isolated approved-test runner, recorded evidence,
-   and confirmed voice actions.
-6. **Release:** packaged Python sidecar, Tauri installer, upgrade-safe local
-   migrations, backup and restore, and clean-machine verification.
+## Current verification
 
-## Security and hosted deployment update (2026-11-25)
-
-The service now has workspace tenant scoping, a registered-route authorization
-test, account password change and recovery, revocable sessions, actor-attributed
-audit events, and Redis-backed shared rate limits. Public deployment checks
-require TLS PostgreSQL/Oracle, HTTPS origins, exact CORS origins, TLS Redis, and
-TLS email recovery. Alembic migrations run at app startup and PostgreSQL cold
-starts serialize through an advisory lock. Vercel uses `backend/index.py` and
-the repository-root SPA rewrite; SQLite is reported ephemeral there. Dedicated
-Documents and Activity screens now use the real persistent APIs.
-
-The live backend is currently failing: the configured API URL returned HTTP
-500 `FUNCTION_INVOCATION_FAILED` on 2026-11-25. Its Vercel logs require an
-interactive sign-in and this checkout is not linked to a Vercel project, so
-the startup exception and deployed environment cannot be verified here. Check
-that the backend Root Directory is `backend` and that all required public
-variables are set: persistent PostgreSQL with TLS, auth/bootstrap values,
-HTTPS API/app origins, exact HTTPS CORS, TLS Redis, and TLS SMTP recovery. Do
-not disable fail-closed checks to make the function start.
-
-## Current build boundary
-
-The local SQLite, PostgreSQL and Oracle adapters, Alembic history,
-Tauri/PyInstaller packaging, and product modules have since been implemented
-incrementally. Workspace authorization, account recovery, token revocation,
-actor-attributed audit, Redis-backed public rate limits, and public deployment
-configuration checks are present. Oracle connectivity and schema upgrades
-remain unverified against a live Oracle server. Shared deployment remains
-blocked by the failing/uninspectable Vercel runtime, not by the old missing-auth
-baseline.
-
-## Current prioritized implementation plan (2026-11-25)
-
-1. **P0 — Restore and verify hosted API.** Obtain access to the Vercel project
-   logs and environment settings; verify backend Root Directory, Python runtime,
-   PostgreSQL TLS URL, auth/bootstrap variables, HTTPS origins/CORS, Redis TLS,
-   and SMTP recovery. Redeploy and verify health, login, workspace isolation,
-   and persistent writes. The API currently returns HTTP 500; no production
-   setting can be changed from this checkout.
-2. **P1 — Expand authorization acceptance tests (in progress).** The first
-   slice now probes 19 project and project-owned read/write route paths against
-   users with no membership and membership in a different workspace; the tenant
-   test passes. Add remaining system Admin and workspace
-   Owner/Admin/Editor/Viewer actions and cross-workspace record IDs. The
-   registered-route sweep verifies that routes
-   reject missing authentication; it does not exhaustively verify every role
-   policy.
-3. **P1 — Frontend modularization.** Gradually move screens, hooks, shared UI,
-   types, and API access out of the oversized `src/App.tsx`, preserving the
-   existing shell, routes, and visual identity. Add route-level browser tests
-   before broad structural changes.
-4. **P2 — Close traceability and testing gaps.** Add test suites, evidence
-   attachments, richer defect history, and design/task nodes, then validate
-   coverage, orphan, failed-test, and impact views against persisted records.
-5. **P2 — Production operations and AI verification.** Add deploy/CI checks,
-   structured request logs and monitoring, live provider tests with safe test
-   credentials, and backup/restore plus clean-machine desktop install/upgrade
-   coverage.
-
-### Current verification snapshot
-
-- Backend: 48 tests pass (one Starlette/httpx deprecation warning).
-- Frontend: TypeScript check and production Vite build pass.
-- Desktop: NSIS installer present at
-  `src-tauri/target/release/bundle/nsis/ReqTrace AI_0.1.0_x64-setup.exe`.
-- Hosted API: health request returns HTTP 500; Vercel logs and project settings
-  are inaccessible without interactive account access.
-
-## Audit and hardening update (historical baseline, 2026-11-17)
-
-See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the repository-wide baseline and
-route inventory. The first follow-up slices add non-destructive Alembic
-bootstrap/upgrade support, a soft-delete migration with retained audit history,
-priority filtering, sorting, pagination, CSV export, a dark navy/violet theme,
-an explicit not-found page, and visible storage/sync errors. A persisted
-requirement-to-requirement traceability module then created/removed links,
-recorded link audit events, and reported linked/orphan requirements. Subsequent
-sections below document the product modules added after that baseline. Current
-status and remaining work are in the audit report.
-
-## Test management and defect register slice (2026-11-17)
-
-The next phase now has a first vertical slice: test cases store preconditions,
-ordered steps, expected results, and an optional requirement link; defects store
-severity/status and optional requirement/test-case links. Both are
-project-scoped, audited, and covered by Alembic revision `20261117_0004`.
-The `/tests` and `/defects` routes provide create/list/status workflows.
-Automated execution, run evidence, richer defect editing, and full traceability
-visualization remain outstanding. The new slice passes the API and migration
-tests and TypeScript check; a fresh sidecar/installer build is still required.
-
-## AI requirement intelligence slice (2026-11-17)
-
-Revision `20261117_0005` stores validated analysis history. `/ai` is a working
-requirement-by-requirement review workflow with provider labels, local
-heuristic fallback, and user acceptance of suggested criteria. OpenAI-
-compatible provider configuration is server-only (`AI_API_KEY`, `AI_BASE_URL`,
-`AI_MODEL`) and must be placed in the ignored backend `.env` or deployment
-environment. No key is included in the frontend or source control. External
-provider behavior remains unverified without credentials. AI test generation,
-grounded assistant conversations, and saved analysis history are now implemented.
-Streaming responses and accept/reject/edit controls for every AI suggestion type
-remain future work.
-
-## Manual test execution history slice (2026-11-17)
-
-Revision `20261117_0006` persists each manual execution with status and actual
-result. The test case screen can record Passed, Failed, Blocked, or Skipped
-runs and inspect prior execution history. Events are audited and queued for
-future sync. Test suite management, tester assignment, automated execution,
-and run evidence attachments remain outstanding. TypeScript and all 12 backend
-tests pass; the packaged Windows installer and sidecar smoke test pass for this
-revision (28.84 MiB installer).
-
-The overview now reads test-case coverage, recorded run pass rate, open defects,
-and audit activity from the local API, and refreshes on demand. Requirement
-counts and status distribution use the active project records. API-dependent
-metrics use an explicit unavailable state while offline. Date filters, trend
-visualizations, and report export remain planned.
-
-## Grounded assistant slice (2026-11-17)
-
-Revision `20261117_0007` adds project-scoped conversation/message tables. The
-assistant retrieves matching requirements, test cases, and defects, returns
-record citations, and stores both sides of the conversation. It uses the
-configured server-side AI provider when available and an explicitly labeled
-local-search response otherwise. Cross-project conversation access is
-rejected. Streaming, regenerate, and richer semantic retrieval remain future
-work. TypeScript and all 14 backend tests pass; the refreshed installer and
-packaged-sidecar smoke test pass (28.85 MiB installer).
-
-## GitHub read-only integration slice (2026-11-17)
-
-Revision `20261117_0008` stores connected repositories, imported GitHub records,
-and links from requirements. The `/github` page syncs repository metadata,
-issues, pull requests, commits, and branches through a server-side token and
-offers requirement linking. It uses manual pull only; no token is sent to the
-frontend. A mocked provider test checks import/link and non-disclosure. Configure
-a least-privilege `GITHUB_TOKEN` in the ignored backend `.env` to use it. No
-live account token is present here; OAuth, webhooks, pagination, and background
-sync remain future work. TypeScript and all 15 backend tests pass; the
-refreshed installer and packaged-sidecar smoke test pass (28.86 MiB installer).
-
-## Reports slice
-
-The `/reports` route builds requirement progress, test execution history, and
-defect analysis from current project state and persisted API records. It
-supports refresh and CSV export with spreadsheet-formula cells neutralized.
-PDF/XLSX, date filters, and scheduled report generation are still open.
-TypeScript and Vite builds pass, and the refreshed 28.86 MiB installer plus
-packaged-sidecar smoke test pass.
-
-## Automation checks slice
-
-Revision `20261117_0009` adds persisted rule enablement and execution history.
-The `/automation` page exposes three read-only checks: orphan requirements,
-requirements without linked tests, and open critical defects. Users enable a
-rule before triggering it; results and finding lists are saved and audited.
-No automatic notifications, schedules, or write actions run. API tests cover
-enablement, execution results, disabled-run rejection, and history. Installer
-packaging and sidecar smoke test pass; TypeScript and all 16 backend tests
-pass. The refreshed 28.87 MiB installer includes this migration.
-
-## Requirement history and discussion slice
-
-Revision `20261117_0010` adds immutable requirement snapshots and project
-comments. Requirement creation stores the initial snapshot; every accepted
-update stores the resulting version. The requirement drawer shows version
-history and supports comments. Both changes generate audit and sync-outbox
-records. Initial history and comment endpoints are covered by API tests.
-All 16 backend tests and TypeScript checks pass, and the refreshed 28.87 MiB
-installer passed the packaged-sidecar migration/health smoke test.
-
-The requirement list now imports validated UTF-8 CSV rows through the existing
-persisted create path, reports invalid row numbers, and exports with formula
-neutralization. Type and priority values are checked before creating records.
-Excel import and bulk field editing beyond priority remain planned.
-
-The test management page also generates structured suggestions from a selected
-requirement. Provider output is schema-validated; the fallback uses acceptance
-criteria and remains clearly labeled. Suggestions are review-only until a user
-adds a case. The fallback/no-auto-save API test passes as part of the 17-test
-backend suite.
-
-The `/projects` route lists project workspaces and switches the active project.
-The requirements list supports confirmed bulk priority changes on selected
-editable records. Approved and rejected baseline records are excluded from
-selection. Test generation was added from requirement context with explicit
-user review before saving. TypeScript and all 17 backend tests pass. The
-refreshed 28.88 MiB installer passed the packaged-sidecar smoke test.
-
-## Authenticated API foundation (2026-11-18)
-
-Revision `20261118_0011` adds persistent user accounts. Oracle mode requires
-authentication by default; the initial administrator is provisioned from
-server-only bootstrap environment variables. Passwords use PBKDF2-HMAC-SHA256
-hashes, bearer tokens are HMAC-signed with a configurable short expiration,
-and the app uses tab-scoped session storage with a sign-in gate and sign-out.
-Admin can create/list/deactivate accounts; global Admin/Editor/Viewer guards
-protect writes and deletes. In-process request limits throttle login and API
-traffic. API tests cover bootstrap idempotency, login, token tampering, role
-guards, account deactivation, last-admin protection, and throttling. TypeScript,
-all 20 backend tests, Windows packaging, and the post-package sidecar suite pass.
-
-This is not yet safe for shared network deployment: roles are global, projects
-are now isolated by Editor/Viewer memberships at project and record routes,
-existing tokens remain valid until expiry after an account is deactivated,
-password reset is absent, and in-memory rate limits do not coordinate across
-multiple workers. The admin/member workflows are API-only. No live Oracle
-startup was available to verify migration/bootstrap against an Oracle instance.
-
-## Project membership authorization slice (2026-11-18)
-
-Revision `20261118_0012` adds project/user membership records with Editor or
-Viewer roles. System Admins manage memberships through `/api/v1/projects/{id}/members`.
-Non-admin project listings are filtered by membership; a shared authorization
-dependency checks project-scoped routes and resolves requirement, case, defect,
-and conversation IDs before granting access. Project creators with the Editor
-role receive Editor membership automatically. Tests cover project filtering,
-assignment/removal, record-ID route checks, Viewer write rejection, and
-cross-project project-ID replay. The project settings page now provides an
-Admin membership surface to assign, create, and remove project access. Global
-account lifecycle still uses the API. These guards do not provide organization
-tenancy; an exhaustive API authorization review and live Oracle migration
-check remain open.
-
-## Current audit against the master prompt (2026-11-18)
-
-See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the route inventory, evidence,
-and limitation register. The previous baseline findings in this plan have
-been superseded by the progress records above. The latest traceability
-milestone adds requirement-linked test/run/defect/GitHub references to the
-matrix; it does not model design components or development task records.
-
-### Historical delivery gates (2026-11-18; superseded by current prioritized plan)
-
-1. **Secure shared service (P0):** auth now provides a bootstrap admin, PBKDF2
-   password hashes, expiring HMAC bearer tokens, database-verified current
-   account roles/status, project memberships, filtered project lists,
-   record-route guards, account/member admin APIs, and per-process request
-   limits. Still implement password reset, distributed rate limiting, organization
-   tenancy, audit actor attribution, global account lifecycle UI, and
-   deployment hardening.
-   Audit every API family and verify Oracle deployment before network access.
-2. **Testing completeness:** add browser E2E tests for route loading, forms,
-   CRUD, responsive navigation, and offline recovery; perform keyboard and
-   screen-reader checks; install and upgrade the NSIS artifact on a clean
-   Windows environment.
-3. **Domain completeness:** add suites and assignment; broaden defect fields
-   and history; model design/task trace records; add remaining analytics,
-   exports, and controlled automation capabilities from the master prompt.
-4. **Operational readiness:** verify live Oracle migrations, backup/restore,
-   AI/GitHub integrations with least-privilege test credentials, structured
-   logs, and scale behavior. Credentials and an Oracle environment were not
-   available during this audit.
-
-## Product audit slice (2026-11-20)
-
-The browser smoke audit rendered all current application routes and the
-not-found route without console errors. The project gained a first persisted-
-data knowledge graph for requirements, tests, defects, and GitHub references,
-with search, entity filtering, zoom, selection, and relationship details.
-Design/task/objective/evidence/risk/document/decision records, graph dragging,
-path highlighting, export, and automated browser coverage remain open.
-
-The API now resolves account activity and role from the database on each
-authenticated request so deactivation and role changes revoke old token
-permissions immediately. CORS origins are configurable through
-`CORS_ALLOWED_ORIGINS`. TypeScript, Vite build, production npm audit, Python
-dependency checks, and all 21 backend tests pass. This is not deployment
-approval: no domain or server target was identified, the Hostinger account
-lookup did not return, and the existing shared-service security and live
-Oracle gates remain open.
-
-These are gates, not completed deliverables. The current implementation is a
-local-first functional build and must not be represented as an authenticated
-team SaaS product.
+- Django test suite: **25 passed** (includes Application Blueprint traceability,
+  edit, clarification and approval-gate cases).
+- Frontend Vitest: **5 passed** (includes project blueprint readiness/create UI).
+- TypeScript validation and Vite production build: passed.
+- Django system check, migration drift check and OpenAPI validation: passed.
+- MySQL connectivity, production deployment, Python 3.12 execution and
+  browser-level E2E: not verified in this environment.
+- Browser bearer tokens are currently in `sessionStorage`; this is not the
+  final production session design.
