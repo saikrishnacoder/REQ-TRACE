@@ -32,8 +32,9 @@
    after clarifications before scaffolding. It does not call a live AI provider.
 5. **Documents and requirements:** implement file validation/storage,
    provenance-aware extraction, requirement CRUD, versions, evidence and
-   quality findings. Begin here next; these authoring and approval workflows
-   are needed to supply blueprint inputs in-product.
+   quality findings. Backend CRUD, requirement versioning/review, 20 MB file
+   upload, TXT/Markdown extraction and source approvals are implemented; PDF/
+   DOCX extraction, quality scoring and frontend authoring/review UI remain.
 6. **Business/audience/design:** add evidence-aware reports, editable personas,
    design artefacts and renderable diagrams.
 7. **AI orchestration:** configurable providers, structured validation,
@@ -46,8 +47,8 @@
 
 ## Current verification
 
-- Django test suite: **25 passed** (includes Application Blueprint traceability,
-  edit, clarification and approval-gate cases).
+- Django test suite: **28 passed** (includes project scoping, CRUD, versions,
+  approval, file upload, traceability and blueprint gate cases).
 - Frontend Vitest: **5 passed** (includes project blueprint readiness/create UI).
 - TypeScript validation and Vite production build: passed.
 - Django system check, migration drift check and OpenAPI validation: passed.

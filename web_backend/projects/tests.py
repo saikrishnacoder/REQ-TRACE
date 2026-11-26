@@ -1,9 +1,11 @@
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.http import HttpResponse
-from django.test import RequestFactory, SimpleTestCase, TestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
+from tempfile import TemporaryDirectory
 from rest_framework.test import APITestCase
 from unittest.mock import patch
 
@@ -181,5 +183,134 @@ class ProjectAPIAccessTests(APITestCase):
         removed = self.client.delete(f"{url}{self.outsider.pk}/")
         self.assertEqual(removed.status_code, 204)
         self.assertNotIn(self.outsider.username, {item["username"] for item in self.client.get(url).data})
+
+
+class EngineeringAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(username="eng-owner", email="eng-owner@example.test", password="Strong-Engineering-123!")
+        self.editor = User.objects.create_user(username="eng-editor", email="eng-editor@example.test", password="Strong-Engineering-123!")
+        self.viewer = User.objects.create_user(username="eng-viewer", email="eng-viewer@example.test", password="Strong-Engineering-123!")
+        self.outsider = User.objects.create_user(username="eng-outsider", email="eng-outsider@example.test", password="Strong-Engineering-123!")
+        self.workspace = Workspace.objects.create(name="Engineering", key="engineering", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.owner, role="Owner")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.editor, role="Editor")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role="Viewer")
+        self.project = Project.objects.create(workspace=self.workspace, key="api", name="API Project", owner=self.owner)
+        self.other_project = Project.objects.create(workspace=self.workspace, key="other", name="Other Project", owner=self.owner)
+        self.media = TemporaryDirectory()
+        self.override_media = override_settings(MEDIA_ROOT=self.media.name)
+        self.override_media.enable()
+        self.addCleanup(self.override_media.disable)
+        self.addCleanup(self.media.cleanup)
+
+    def authenticate(self, user):
+        from accounts.views import issue_session
+        token, _ = issue_session(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_requirement_crud_versions_approval_search_pagination_and_workspace_roles(self):
+        self.authenticate(self.editor)
+        base = f"/api/v1/projects/{self.project.pk}/requirements/"
+        created = self.client.post(base, {
+            "code": "REQ-1", "title": "Create account", "statement": "A visitor can create an account.",
+            "category": "Functional", "acceptance_criteria": ["Account is persisted"],
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        requirement_id = created.data["id"]
+        self.assertEqual(created.data["current_version"], 1)
+        self.assertEqual(self.client.get(base + "?search=account&page_size=1").data["count"], 1)
+        self.assertEqual(self.client.get(base + "?category=Security").data["count"], 0)
+        cross_project = self.client.get(f"/api/v1/projects/{self.other_project.pk}/requirements/{requirement_id}/")
+        self.assertEqual(cross_project.status_code, 404)
+
+        updated = self.client.patch(f"{base}{requirement_id}/", {"statement": "A user can register."}, format="json")
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(updated.data["current_version"], 2)
+        versions = self.client.get(f"{base}{requirement_id}/versions/")
+        self.assertEqual([row["version"] for row in versions.data], [2, 1])
+        self.assertEqual(versions.data[0]["snapshot"]["statement"], "A user can register.")
+
+        requested = self.client.post(f"{base}{requirement_id}/submit-review/", {"comment": "Ready"}, format="json")
+        self.assertEqual(requested.status_code, 201, requested.data)
+        approval_id = requested.data["id"]
+        self.authenticate(self.viewer)
+        denied = self.client.post(f"/api/v1/projects/{self.project.pk}/approvals/{approval_id}/decision/", {"decision": "Approved"}, format="json")
+        self.assertEqual(denied.status_code, 403)
+        self.authenticate(self.owner)
+        approved = self.client.post(f"/api/v1/projects/{self.project.pk}/approvals/{approval_id}/decision/", {"decision": "Approved", "comment": "Accepted"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        current = self.client.get(f"{base}{requirement_id}/")
+        self.assertEqual(current.data["status"], "Approved")
+        self.assertEqual(current.data["approval_state"], "Approved")
+
+    def test_text_document_upload_design_versions_and_approval(self):
+        self.authenticate(self.editor)
+        document_url = f"/api/v1/projects/{self.project.pk}/documents/"
+        upload = SimpleUploadedFile("scope.md", b"# Scope\nThe system supports accounts.", content_type="text/markdown")
+        document = self.client.post(document_url, {"file": upload}, format="multipart")
+        self.assertEqual(document.status_code, 201, document.data)
+        self.assertEqual(document.data["extraction_status"], "Ready")
+        self.assertIn("supports accounts", document.data["extracted_text"])
+        self.assertEqual(len(document.data["sha256"]), 64)
+        download = self.client.get(f"{document_url}{document.data['id']}/download/")
+        self.assertEqual(download.status_code, 200)
+        self.assertIn("attachment", download["Content-Disposition"])
+        self.assertIn(b"supports accounts", b"".join(download.streaming_content))
+        invalid_upload = SimpleUploadedFile("payload.py", b"print('no')", content_type="text/plain")
+        invalid = self.client.post(document_url, {"file": invalid_upload}, format="multipart")
+        self.assertEqual(invalid.status_code, 400)
+
+        design_url = f"/api/v1/projects/{self.project.pk}/design-artifacts/"
+        design = self.client.post(design_url, {"kind": "Architecture", "title": "System", "content": {"backend": "Django REST Framework"}}, format="json")
+        self.assertEqual(design.status_code, 201, design.data)
+        newer = self.client.patch(f"{design_url}{design.data['id']}/", {"content": {"backend": "DRF"}}, format="json")
+        self.assertEqual(newer.status_code, 201, newer.data)
+        self.assertEqual(newer.data["version"], 2)
+        self.assertNotEqual(newer.data["id"], design.data["id"])
+
+        approval_url = f"/api/v1/projects/{self.project.pk}/approvals/"
+        requested = self.client.post(approval_url, {"artefact_type": "SourceDocument", "artefact_id": document.data["id"], "artefact_version": 1}, format="json")
+        self.assertEqual(requested.status_code, 201, requested.data)
+        self.authenticate(self.owner)
+        approved = self.client.post(f"{approval_url}{requested.data['id']}/decision/", {"decision": "Approved"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        readiness = self.client.get(f"/api/v1/projects/{self.project.pk}/generation/readiness/")
+        self.assertEqual(readiness.data["approved_srs_count"], 1)
+
+    def test_testing_traceability_business_and_audience_endpoints_are_persistent_and_scoped(self):
+        self.authenticate(self.editor)
+        root = f"/api/v1/projects/{self.project.pk}/"
+        suite = self.client.post(root + "test-suites/", {"name": "Smoke"}, format="json")
+        self.assertEqual(suite.status_code, 201, suite.data)
+        case = self.client.post(root + "test-cases/", {
+            "code": "TC-1", "title": "Registration works", "suite": suite.data["id"],
+            "expected_result": "Account is created", "steps": ["Submit registration form"],
+        }, format="json")
+        self.assertEqual(case.status_code, 201, case.data)
+        execution = self.client.post(root + "test-executions/", {"test_case": case.data["id"], "result": "Passed", "actual_result": "Account created"}, format="json")
+        self.assertEqual(execution.status_code, 201, execution.data)
+        self.assertEqual(self.client.get(root + "test-executions/").data["results"][0]["executed_by"], self.editor.pk)
+
+        link = self.client.post(root + "traceability-links/", {
+            "source_type": "TestCase", "source_id": case.data["id"], "target_type": "TestSuite",
+            "target_id": suite.data["id"], "relationship_type": "part_of",
+        }, format="json")
+        self.assertEqual(link.status_code, 201, link.data)
+        self.assertEqual(link.data["status"], "Proposed")
+        self.authenticate(self.owner)
+        confirmed = self.client.post(root + f"traceability-links/{link.data['id']}/confirm/", {}, format="json")
+        self.assertEqual(confirmed.status_code, 200, confirmed.data)
+        self.assertEqual(confirmed.data["status"], "Confirmed")
+
+        analysis = self.client.post(root + "business-analyses/", {"problem": "Manual workflow is slow."}, format="json")
+        self.assertEqual(analysis.status_code, 201, analysis.data)
+        objective = self.client.post(root + "business-objectives/", {"title": "Reduce handling time"}, format="json")
+        self.assertEqual(objective.status_code, 201, objective.data)
+        persona = self.client.post(root + "personas/", {"name": "Analyst", "role": "Operations", "goals": ["Resolve cases"]}, format="json")
+        self.assertEqual(persona.status_code, 201, persona.data)
+        validated = self.client.post(root + f"personas/{persona.data['id']}/validate/", {}, format="json")
+        self.assertEqual(validated.status_code, 200, validated.data)
+        self.assertEqual(validated.data["validation_state"], "Validated")
 import json
 

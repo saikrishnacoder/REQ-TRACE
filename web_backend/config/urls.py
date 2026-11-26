@@ -8,6 +8,23 @@ from accounts.views import CurrentUserView, LoginView, LogoutView, RegisterView
 import accounts.schema  # noqa: F401 - registers the OpenAPI bearer scheme extension
 from projects.views import ArchiveProjectView, DuplicateProjectView, ProjectActivityView, ProjectDetailView, ProjectListCreateView, RestoreProjectView, WorkspaceListCreateView, WorkspaceMemberDetailView, WorkspaceMembersView
 from application_generation.views import GeneratedFileReviewView, GenerationPlanDetailView, GenerationPlanListCreateView, GenerationPlanReviewView, GenerationReadinessView, GenerationRunDetailView, GenerationRunDownloadView, GenerationRunListCreateView
+from django.urls import include
+from rest_framework.routers import SimpleRouter
+from engineering_api import ApprovalViewSet, BusinessAnalysisViewSet, BusinessObjectiveViewSet, DesignArtifactViewSet, PersonaViewSet, RelationshipViewSet, RequirementViewSet, SourceDocumentViewSet, StakeholderViewSet, TestCaseViewSet, TestExecutionViewSet, TestSuiteViewSet
+
+engineering_router = SimpleRouter()
+engineering_router.register("requirements", RequirementViewSet, basename="project-requirements")
+engineering_router.register("documents", SourceDocumentViewSet, basename="project-documents")
+engineering_router.register("design-artifacts", DesignArtifactViewSet, basename="project-design-artifacts")
+engineering_router.register("business-analyses", BusinessAnalysisViewSet, basename="project-business-analyses")
+engineering_router.register("business-objectives", BusinessObjectiveViewSet, basename="project-business-objectives")
+engineering_router.register("stakeholders", StakeholderViewSet, basename="project-stakeholders")
+engineering_router.register("personas", PersonaViewSet, basename="project-personas")
+engineering_router.register("test-suites", TestSuiteViewSet, basename="project-test-suites")
+engineering_router.register("test-cases", TestCaseViewSet, basename="project-test-cases")
+engineering_router.register("test-executions", TestExecutionViewSet, basename="project-test-executions")
+engineering_router.register("traceability-links", RelationshipViewSet, basename="project-traceability-links")
+engineering_router.register("approvals", ApprovalViewSet, basename="project-approvals")
 
 
 urlpatterns = [
@@ -26,6 +43,7 @@ urlpatterns = [
     path("api/v1/projects/<uuid:project_id>/archive/", ArchiveProjectView.as_view(), name="project-archive"),
     path("api/v1/projects/<uuid:project_id>/restore/", RestoreProjectView.as_view(), name="project-restore"),
     path("api/v1/projects/<uuid:project_id>/duplicate/", DuplicateProjectView.as_view(), name="project-duplicate"),
+    path("api/v1/projects/<uuid:project_id>/", include(engineering_router.urls)),
     path("api/v1/projects/<uuid:project_id>/generation/readiness/", GenerationReadinessView.as_view(), name="generation-readiness"),
     path("api/v1/projects/<uuid:project_id>/generation/plans/", GenerationPlanListCreateView.as_view(), name="generation-plans"),
     path("api/v1/generation/plans/<uuid:plan_id>/", GenerationPlanDetailView.as_view(), name="generation-plan-detail"),

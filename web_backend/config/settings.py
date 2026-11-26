@@ -174,10 +174,12 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "config.exceptions.api_exception_handler",
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_PAGINATION_CLASS": "projects.pagination.ProjectPageNumberPagination",
+    "PAGE_SIZE": 25,
 }
 SPECTACULAR_SETTINGS = {
     "TITLE": "SpecForge AI API",
-    "DESCRIPTION": "Hosted project engineering API. Feature endpoints are introduced phase by phase.",
+    "DESCRIPTION": "Authenticated, workspace-scoped SpecForge project engineering API. Related approved requirement IDs are unavailable until approved requirement records are present.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }

@@ -7,17 +7,25 @@ data. SQLite is used only for local development and tests.
 
 The current working slice supports account registration and login, workspace
 creation and membership management, project CRUD and lifecycle controls,
-project activity, and an approval-gated Application Blueprint workflow. The
+project activity, project-scoped engineering APIs, and an approval-gated Application Blueprint workflow. The
 blueprint uses approved requirement/design records, validated personas,
 approved business analysis, and explicitly approved SRS documents. Its source
 IDs and document checksums are persisted for traceability. Missing information
 appears as clarification questions; an Owner/Admin cannot approve for
 scaffolding while a question is unresolved.
 
-Requirement and design authoring/review screens, document ingestion and the
-provider-backed AI analysis of source documents remain planned. The blueprint
-builder is currently deterministic and does not claim that a live AI provider
-analyzed project inputs.
+The Django API now exposes CRUD and workflow endpoints for requirements and
+versions, source documents, versioned design artifacts, business analysis and
+objectives, stakeholders and personas, test suites/cases/executions,
+traceability links, and approvals. These endpoints are documented in OpenAPI;
+the portal screens for authoring and reviewing these records are not yet wired.
+PDF/DOCX files are stored but extraction is not implemented; UTF-8 TXT/Markdown
+files are extracted synchronously with a 1 MB text limit.
+
+The frontend authoring/review screens, PDF/DOCX extraction, and provider-backed
+AI analysis of source documents remain planned. The blueprint builder is
+currently deterministic and does not claim that a live AI provider analyzed
+project inputs.
 
 ## Local development
 

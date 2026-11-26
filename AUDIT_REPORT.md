@@ -16,7 +16,10 @@ and tracked product code are React/Vite + Django/MySQL.
 - **Product flows implemented:** registration/login/logout, profile updates,
   workspace creation, existing-user membership management, project CRUD,
   archive/restore/duplicate, actor-attributed project activity, and a
-  persisted, approval-gated Application Blueprint workflow.
+  persisted, approval-gated Application Blueprint workflow. Project-scoped
+  DRF endpoints now cover requirements/version history, source documents,
+  design versions, business/audience records, test suites/cases/executions,
+  traceability relationships and approval decisions.
 - **Repository scope:** the root application is SpecForge. Local backend
   credentials were kept outside the repository during cleanup.
 
@@ -40,6 +43,11 @@ yet been added.
 - Auth and project endpoints enforce workspace membership; tests cover account
   registration/login/session expiry/revocation, workspace roles, cross-tenant
   isolation, project lifecycle, team changes and activity attribution.
+- Engineering API routes share workspace scoping, role checks, activity events,
+  request validation, search/filtering, and 25-row pagination (maximum 100).
+  OpenAPI derives request/response schemas from DRF serializers. Approved
+  requirement IDs could not be attached to the endpoint docs because the local
+  project database currently contains no approved requirements or API spec.
 - Application blueprints include project overview, role matrix, feature and
   requirement breakdown, page/journey/navigation/component/backend/database/
   API inventories, security/performance/integration sections, development
@@ -49,7 +57,7 @@ yet been added.
   must resolve each question or mark it not applicable with a reason before
   approval; code scaffolding remains behind that approval. Generated plans
   are deterministic proposals, not live-provider AI analysis.
-- Current verification: Django tests **25 passed**; Vitest **5 passed**;
+- Current verification: Django tests **28 passed**; Vitest **5 passed**;
   TypeScript, Vite production build, migration drift check and OpenAPI schema
   validation passed. Live Vite root and API-proxy health requests returned
   HTTP 200.
@@ -59,11 +67,11 @@ yet been added.
 
 ## Missing product capabilities
 
-1. User-facing requirement/design authoring, versioning, source ingestion and
-   approval workflows. Approved SRS snapshots can only be linked when a
-   corresponding document approval exists; document authoring/approval is not
-   yet wired to the portal.
-2. Provider-backed blueprint analysis, with validated outputs and citations;
+1. Frontend screens for the newly implemented requirement/design/document,
+   business/audience, test, traceability and approval APIs. Approved SRS
+   snapshots can only be linked when a corresponding document approval exists.
+2. PDF/DOCX extraction, queued document processing, and provider-backed
+   blueprint analysis with validated outputs and citations;
    no live AI provider call was made for this phase.
 3. Test execution/evidence, complete traceability graph, coverage and impact
    reports, exports, notifications and activity across all artefacts.
@@ -76,8 +84,11 @@ yet been added.
   Replace with an HttpOnly/CSRF design or identity provider before deployment.
 - There is no shared rate limiter, password recovery, invitation email service,
   background task queue or production media store.
-- Requirement and design tables exist, but users still cannot create or approve
-  those inputs through the SpecForge portal; blueprint generation therefore
-  depends on approved records supplied by a separate trusted workflow.
+- Requirement and design API operations exist, but users still cannot create
+  or approve those inputs through the SpecForge portal; blueprint generation
+  therefore depends on approved records supplied through the API or another
+  trusted workflow.
+- Docker/MySQL is unavailable in this environment; database connectivity and
+  migrations were verified against local SQLite only.
 - MySQL adapter configuration has not been exercised against a real MySQL
   server; current tests use SQLite.
