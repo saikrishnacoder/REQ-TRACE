@@ -1,3 +1,7 @@
+import io
+import json
+import zipfile
+
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from unittest.mock import patch
@@ -51,7 +55,11 @@ class GenerationPlanAPITests(APITestCase):
         for index, kind in enumerate(kinds):
             artifact = DesignArtifact.objects.create(
                 project=self.project, kind=kind, title=f"Approved {kind}", version=1,
-                content={"confirmed": True, "kind": kind}, created_by=self.owner,
+                content={
+                    "confirmed": True,
+                    "kind": kind,
+                    "backend_modules": ["accounts", {"name": "inventory"}] if kind == DesignArtifact.Kind.ARCHITECTURE else [],
+                }, created_by=self.owner,
             )
             Approval.objects.create(
                 project=self.project, artefact_type="DesignArtifact", artefact_id=artifact.pk,
@@ -168,6 +176,71 @@ class GenerationPlanAPITests(APITestCase):
         self.authenticate_as(self.viewer)
         response = self.client.post(f"/api/v1/projects/{self.project.pk}/generation/plans/", {}, format="json")
         self.assertEqual(response.status_code, 403)
+
+    def test_approved_blueprint_generates_safe_runnable_scaffold_archive(self):
+        self.add_approved_inputs()
+        self.authenticate_as(self.owner)
+        draft = self.client.post(f"/api/v1/projects/{self.project.pk}/generation/plans/", {}, format="json")
+        self.assertEqual(draft.status_code, 201, draft.data)
+        plan_id = draft.data["id"]
+        self.assertEqual(self.resolve_blueprint_questions(plan_id).status_code, 200)
+        approved = self.client.post(f"/api/v1/generation/plans/{plan_id}/approve/", {}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+
+        response = self.client.post(f"/api/v1/generation/plans/{plan_id}/scaffold/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/zip")
+        self.assertIn("no-store", response["Cache-Control"])
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            names = set(archive.namelist())
+            self.assertIn("frontend/package.json", names)
+            self.assertIn("frontend/src/pages/HomePage.tsx", names)
+            self.assertIn("frontend/src/services/api.ts", names)
+            self.assertIn("frontend/src/pages/ApprovedUserFlowPage.tsx", names)
+            self.assertIn("backend/config/settings/development.py", names)
+            self.assertIn("backend/config/settings/production.py", names)
+            self.assertIn("backend/apps/core/views.py", names)
+            self.assertIn("backend/apps/core/tests.py", names)
+            self.assertIn("backend/apps/accounts/apps.py", names)
+            self.assertIn("backend/apps/inventory/apps.py", names)
+            self.assertIn("database/README.md", names)
+            self.assertIn("docs/blueprint-traceability.json", names)
+            self.assertFalse(any(name.startswith("/") or ".." in name.split("/") for name in names))
+            package = json.loads(archive.read("frontend/package.json"))
+            self.assertIn("react-router-dom", package["dependencies"])
+            self.assertIn("@tanstack/react-query", package["dependencies"])
+            self.assertIn("tailwindcss", package["devDependencies"])
+            requirements = archive.read("backend/requirements.txt").decode()
+            self.assertIn("Django", requirements)
+            self.assertIn("djangorestframework", requirements)
+            self.assertIn("mysqlclient", requirements)
+            base_settings = archive.read("backend/config/settings/base.py").decode()
+            production_settings = archive.read("backend/config/settings/production.py").decode()
+            self.assertIn("rest_framework.permissions.IsAuthenticated", base_settings)
+            self.assertIn("CSRF_TRUSTED_ORIGINS", production_settings)
+            self.assertIn("DJANGO_CSRF_TRUSTED_ORIGINS", archive.read("backend/.env.example").decode())
+            self.assertIn("apps.inventory.urls", archive.read("backend/config/urls.py").decode())
+        self.assertTrue(self.project.activity_events.filter(action="application_generation.scaffold_downloaded", actor=self.owner).exists())
+
+    def test_scaffold_requires_approved_current_blueprint_and_write_access(self):
+        requirement = self.add_approved_inputs()
+        self.authenticate_as(self.editor)
+        draft = self.client.post(f"/api/v1/projects/{self.project.pk}/generation/plans/", {}, format="json")
+        plan_id = draft.data["id"]
+        pending = self.client.post(f"/api/v1/generation/plans/{plan_id}/scaffold/")
+        self.assertEqual(pending.status_code, 409)
+
+        self.authenticate_as(self.owner)
+        self.assertEqual(self.resolve_blueprint_questions(plan_id).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/v1/generation/plans/{plan_id}/approve/", {}, format="json").status_code, 200)
+        requirement.statement = "Updated after approval."
+        requirement.save(update_fields=["statement", "updated_at"])
+        stale = self.client.post(f"/api/v1/generation/plans/{plan_id}/scaffold/")
+        self.assertEqual(stale.status_code, 409)
+
+        self.authenticate_as(self.viewer)
+        denied = self.client.post(f"/api/v1/generation/plans/{plan_id}/scaffold/")
+        self.assertEqual(denied.status_code, 403)
 
     @patch("application_generation.views.provider_config", return_value=("private-test-key", "https://llm.invalid/v1", "test-model"))
     @patch("application_generation.services.generate_files")

@@ -27,6 +27,18 @@ AI analysis of source documents remain planned. The blueprint builder is
 currently deterministic and does not claim that a live AI provider analyzed
 project inputs.
 
+## Approved blueprint scaffolding
+
+After an Owner/Admin approves a blueprint and resolves every clarification,
+workspace Owners/Admins/Editors can request
+`POST /api/v1/generation/plans/{plan_id}/scaffold/`. It downloads a ZIP with a
+React/TypeScript/Vite/Tailwind frontend, Django REST Framework backend, local
+SQLite development configuration, production MySQL settings, documentation,
+scripts, and blueprint traceability. The operation is rejected if approved
+inputs have changed. It returns an archive and logs the action; it never writes
+into an existing project directory. Extract into a new empty folder. Generated
+behavior is starter scaffolding, not completed business logic.
+
 ## Local development
 
 1. Install Node.js/npm and Python 3.12. Docker is needed only for local MySQL.
@@ -56,6 +68,10 @@ project inputs.
 
 For SQLite-only development, skip Docker and leave `SPECFORGE_DATABASE_URL`
 unset. Django creates `web_backend/.local.sqlite3`. Production refuses SQLite.
+The generated scaffold itself can be built and started independently: follow
+the commands in its README to run `frontend` with Vite and `backend` with Django
+in separate terminals. Local scaffold verification uses SQLite; a live
+production MySQL server is still required to verify that adapter.
 
 ## Configuration and deployment
 

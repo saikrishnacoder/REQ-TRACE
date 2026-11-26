@@ -1,4 +1,5 @@
 import io
+import re
 import zipfile
 
 from django.db import transaction
@@ -17,6 +18,7 @@ from application_generation.models import GeneratedFile, GenerationPlan, Generat
 from application_generation.provider import GeneratedCodeFile, ProviderConfigurationError, provider_config
 from application_generation.serializers import EditBlueprintSerializer, GeneratedFileSerializer, GenerationPlanSerializer, GenerationRunRequestSerializer, GenerationRunSerializer, ReviewGeneratedFileSerializer, ReviewPlanSerializer
 from application_generation.services import create_plan, readiness, review_plan, build_source_snapshot, canonical_json, queue_generation_run, unresolved_clarifications
+from application_generation.scaffolding import build_scaffold_files
 from projects.models import ActivityLog, Project, WorkspaceMembership
 
 
@@ -108,6 +110,40 @@ class GenerationPlanDetailView(GenerationAccessMixin, APIView):
                 details={"sections": sorted(editable.keys()), "version": plan.version},
             )
         return Response(GenerationPlanSerializer(plan).data)
+
+
+class ScaffoldArchiveView(GenerationAccessMixin, APIView):
+    """Return an archive only; the server never writes into an existing project directory."""
+
+    @extend_schema(operation_id="application_scaffold_download", request=None, responses={200: OpenApiResponse(response=OpenApiTypes.BINARY, description="Approved React and Django starter project ZIP")})
+    def post(self, request, plan_id):
+        plan = self.get_generation_plan(request, plan_id)
+        project = self.get_project(request, plan.project_id, write=True)
+        if plan.state != GenerationPlan.State.APPROVED:
+            raise GenerationConflict("Approve the application blueprint before scaffolding.")
+        try:
+            current_snapshot = build_source_snapshot(project)
+        except ValueError as exc:
+            raise GenerationConflict("Approved source inputs changed or are no longer complete. Create a new blueprint.") from exc
+        if canonical_json(current_snapshot) != canonical_json(plan.source_snapshot):
+            raise GenerationConflict("Approved source inputs changed after blueprint approval. Create and approve a new blueprint.")
+
+        files = build_scaffold_files(plan)
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path, content in sorted(files.items()):
+                archive.writestr(path, content)
+        ActivityLog.objects.create(
+            workspace=project.workspace, project=project, actor=request.user,
+            action="application_generation.scaffold_downloaded", target_type="generation_plan",
+            target_id=str(plan.pk), details={"version": plan.version, "file_count": len(files), "source_hash": plan.source_hash},
+        )
+        response = HttpResponse(output.getvalue(), content_type="application/zip")
+        archive_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", project.name.strip().lower()).strip("-_")[:48] or "application"
+        response["Content-Disposition"] = f'attachment; filename="{archive_name}-scaffold-v{plan.version}.zip"'
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class GenerationPlanReviewView(GenerationAccessMixin, APIView):

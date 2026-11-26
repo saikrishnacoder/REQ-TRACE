@@ -7,7 +7,7 @@ from config.health import HealthView
 from accounts.views import CurrentUserView, LoginView, LogoutView, RegisterView
 import accounts.schema  # noqa: F401 - registers the OpenAPI bearer scheme extension
 from projects.views import ArchiveProjectView, DuplicateProjectView, ProjectActivityView, ProjectDetailView, ProjectListCreateView, RestoreProjectView, WorkspaceListCreateView, WorkspaceMemberDetailView, WorkspaceMembersView
-from application_generation.views import GeneratedFileReviewView, GenerationPlanDetailView, GenerationPlanListCreateView, GenerationPlanReviewView, GenerationReadinessView, GenerationRunDetailView, GenerationRunDownloadView, GenerationRunListCreateView
+from application_generation.views import GeneratedFileReviewView, GenerationPlanDetailView, GenerationPlanListCreateView, GenerationPlanReviewView, GenerationReadinessView, GenerationRunDetailView, GenerationRunDownloadView, GenerationRunListCreateView, ScaffoldArchiveView
 from django.urls import include
 from rest_framework.routers import SimpleRouter
 from engineering_api import ApprovalViewSet, BusinessAnalysisViewSet, BusinessObjectiveViewSet, DesignArtifactViewSet, PersonaViewSet, RelationshipViewSet, RequirementViewSet, SourceDocumentViewSet, StakeholderViewSet, TestCaseViewSet, TestExecutionViewSet, TestSuiteViewSet
@@ -47,6 +47,7 @@ urlpatterns = [
     path("api/v1/projects/<uuid:project_id>/generation/readiness/", GenerationReadinessView.as_view(), name="generation-readiness"),
     path("api/v1/projects/<uuid:project_id>/generation/plans/", GenerationPlanListCreateView.as_view(), name="generation-plans"),
     path("api/v1/generation/plans/<uuid:plan_id>/", GenerationPlanDetailView.as_view(), name="generation-plan-detail"),
+    path("api/v1/generation/plans/<uuid:plan_id>/scaffold/", ScaffoldArchiveView.as_view(), name="generation-scaffold"),
     path("api/v1/generation/plans/<uuid:plan_id>/runs/", GenerationRunListCreateView.as_view(), name="generation-run-create"),
     path("api/v1/generation/plans/<uuid:plan_id>/<str:decision>/", GenerationPlanReviewView.as_view(), name="generation-plan-review"),
     path("api/v1/generation/runs/<uuid:run_id>/", GenerationRunDetailView.as_view(), name="generation-run-detail"),

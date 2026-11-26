@@ -67,6 +67,15 @@ is currently assembled deterministically; no live LLM analysis is claimed.
 The separate code proposal worker is optional and requires server-side provider
 configuration. Generated files are never executed.
 
+`POST /api/v1/generation/plans/{plan_id}/scaffold/` downloads a runnable
+React/Vite and Django REST Framework starter ZIP after Owner/Admin blueprint
+approval, with no unresolved clarifications, and while its approved inputs
+remain unchanged. It logs the actor and file count and never writes into an
+existing project directory. The generated README contains independent frontend
+and backend startup instructions. Development defaults to SQLite; production
+settings require a MySQL URL, HTTPS origins, explicit hosts, a strong secret,
+and a trusted MySQL CA certificate.
+
 Approved SRS documents use an `Approval` record with `artefact_type` set to
 `SourceDocument`, the document UUID, and version `1`; only extracted-ready,
 approved documents are snapshotted. Frontend authoring/review screens, PDF/DOCX

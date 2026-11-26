@@ -55,9 +55,12 @@ yet been added.
   requirement traceability. Drafts snapshot approved inputs. Pending drafts
   are editable while source IDs/checksums remain server-managed. Owners/Admins
   must resolve each question or mark it not applicable with a reason before
-  approval; code scaffolding remains behind that approval. Generated plans
-  are deterministic proposals, not live-provider AI analysis.
-- Current verification: Django tests **28 passed**; Vitest **5 passed**;
+  approval. An approved, unchanged plan now produces a download-only React and
+  Django starter ZIP with separate development/production settings, MySQL
+  production configuration, and embedded blueprint traceability. The archive
+  endpoint never writes over a user's files. Generated plans are deterministic
+  proposals, not live-provider AI analysis.
+- Current verification: Django tests **30 passed**; Vitest **5 passed**;
   TypeScript, Vite production build, migration drift check and OpenAPI schema
   validation passed. Live Vite root and API-proxy health requests returned
   HTTP 200.
@@ -88,6 +91,9 @@ yet been added.
   or approve those inputs through the SpecForge portal; blueprint generation
   therefore depends on approved records supplied through the API or another
   trusted workflow.
+- Scaffolding is available as a ZIP API download; there is no portal button or
+  automatic filesystem extraction. The archive is a runnable foundation, not
+  generated project-specific CRUD or business logic.
 - Docker/MySQL is unavailable in this environment; database connectivity and
   migrations were verified against local SQLite only.
 - MySQL adapter configuration has not been exercised against a real MySQL
